@@ -64,8 +64,8 @@
       this.xpEarned = 0;
       this.upgradesTaken = 0;
 
-      this.worldSpeed = 210;
       this.scrollBlend = 0;
+      this.backBlend = 0;
       this.spawnT = 1;
       this.zoneIndex = 0;
       this.lastBossZone = -1;
@@ -183,8 +183,8 @@
       this.upgradesTaken = 0;
       this.lastBossZone = -1;
       this.bossIntroDone = false;
-      this.worldSpeed = 210 * (this.run.scrollMul || 1);
       this.scrollBlend = 0;
+      this.backBlend = 0;
       this.spawnT = 0.6;
       this.zoneIndex = 0;
       this.deathTimer = 0;
@@ -343,14 +343,17 @@
       if (!p) return;
       this.timeSurvived += dt;
 
-      /* world scroll — advances only while the player moves forward */
+      /* world scroll — only moves while the player walks, both directions.
+       * Forward ramps world speed up, backward ramps it down (never below 0). */
+      const axis = this.input.getAxisX();
       const bossSlow = this.boss ? 0.4 : 1;
-      const speedUp = this.run.scrollMul || 1;
-      const scrollBase = (210 + Math.min(110, this.distance * 0.01)) * bossSlow * speedUp;
-      const wantScroll = this.input.getAxisX() > 0.15;
-      this.scrollBlend += ((wantScroll ? 1 : 0) - this.scrollBlend) * Math.min(1, dt * 3);
-      this.worldSpeed = scrollBase * this.scrollBlend;
-      this.scrollX += this.worldSpeed * dt;
+      const scrollBase = (210 + Math.min(110, this.distance * 0.01)) * bossSlow;
+      const wantScroll = axis > 0.15;
+      this.scrollBlend += ((wantScroll ? 1 : 0) - this.scrollBlend) * Math.min(1, dt * (wantScroll ? 3 : 14));
+      const wantBack = axis < -0.15;
+      this.backBlend += ((wantBack ? 1 : 0) - this.backBlend) * Math.min(1, dt * (wantBack ? 3 : 14));
+      this.scrollX += (this.scrollBlend - this.backBlend) * scrollBase * dt;
+      if (this.scrollX < 0) this.scrollX = 0;
       this.distance = this.scrollX / 60;
 
       /* player */

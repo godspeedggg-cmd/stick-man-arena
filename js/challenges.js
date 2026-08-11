@@ -78,7 +78,7 @@
         case "doubleSpawns": run.spawnMul = (run.spawnMul || 1) * 2; break;
         case "noHeal": run.noHeal = true; break;
         case "bossBuff": run.bossHpMul = (run.bossHpMul || 1) * 1.5; break;
-        case "speedUp": run.scrollMul = (run.scrollMul || 1) * 1.25; break;
+        case "speedUp": run.speedMul = (run.speedMul || 1) * 1.25; break;
         case "lowDamage": run.dmgMul *= 0.75; break;
         case "moreElites": run.eliteMul = (run.eliteMul || 1) * 2; break;
         case "limitedAir": run.jumpMul *= 0.7; break;
