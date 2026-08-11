@@ -65,6 +65,7 @@
       this.upgradesTaken = 0;
 
       this.worldSpeed = 210;
+      this.scrollBlend = 0;
       this.spawnT = 1;
       this.zoneIndex = 0;
       this.lastBossZone = -1;
@@ -183,6 +184,7 @@
       this.lastBossZone = -1;
       this.bossIntroDone = false;
       this.worldSpeed = 210 * (this.run.scrollMul || 1);
+      this.scrollBlend = 0;
       this.spawnT = 0.6;
       this.zoneIndex = 0;
       this.deathTimer = 0;
@@ -197,6 +199,7 @@
       SL.Audio.resume();
       SL.Audio.startMusic();
       this.toastZone();
+      SL.UI.toast("HOLD \u2192 TO ADVANCE", "zone");
     }
 
     pause() {
@@ -340,10 +343,13 @@
       if (!p) return;
       this.timeSurvived += dt;
 
-      /* world scroll */
+      /* world scroll — advances only while the player moves forward */
       const bossSlow = this.boss ? 0.4 : 1;
       const speedUp = this.run.scrollMul || 1;
-      this.worldSpeed = (210 + Math.min(110, this.distance * 0.01)) * bossSlow * speedUp;
+      const scrollBase = (210 + Math.min(110, this.distance * 0.01)) * bossSlow * speedUp;
+      const wantScroll = this.input.getAxisX() > 0.15;
+      this.scrollBlend += ((wantScroll ? 1 : 0) - this.scrollBlend) * Math.min(1, dt * 3);
+      this.worldSpeed = scrollBase * this.scrollBlend;
       this.scrollX += this.worldSpeed * dt;
       this.distance = this.scrollX / 60;
 
