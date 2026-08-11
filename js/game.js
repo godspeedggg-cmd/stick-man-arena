@@ -204,11 +204,13 @@
       this.state = "paused";
       SL.UI.showPause();
       SL.Audio.play("click");
+      SL.Audio.pauseMusic();
     }
     resume() {
       if (this.state !== "paused") return;
       this.state = "playing";
       SL.UI.hidePause();
+      SL.Audio.resumeMusic();
       this.last = performance.now();
     }
 

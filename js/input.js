@@ -33,10 +33,11 @@
     /* ---------- virtual button press (DOM touch buttons) ---------- */
     press(action) {
       const v = this._virtual[action] || (this._virtual[action] = { held: false, pressed: false });
+      const edge = !v.held;
       v.held = true;
-      v.pressed = true;
+      v.pressed = edge;
       this.actions[action].held = true;
-      this.actions[action].pressed = true;
+      this.actions[action].pressed = edge;
     }
     release(action) {
       const v = this._virtual[action];
@@ -144,8 +145,9 @@
       const a = this.actions[action];
       if (!a) return;
       if (down) {
+        const edge = !a.held;
         a.held = true;
-        a.pressed = true;
+        a.pressed = edge;
       } else {
         a.held = false;
       }

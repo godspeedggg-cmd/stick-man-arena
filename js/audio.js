@@ -242,6 +242,20 @@
       if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null; }
     }
 
+    pauseMusic() {
+      this._pausedMusic = !!this.musicTimer;
+      this.stopMusic();
+      setTimeout(() => {
+        if (this.ctx && this.ctx.state === "running") this.ctx.suspend();
+      }, 60);
+    }
+
+    resumeMusic() {
+      if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+      if (this._pausedMusic && this.musicOn) this.startMusic();
+      this._pausedMusic = false;
+    }
+
     _musicNote(freq, dur, gain, when, type) {
       const o = this.ctx.createOscillator();
       const g = this.ctx.createGain();
