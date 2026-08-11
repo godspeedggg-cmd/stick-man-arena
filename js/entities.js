@@ -7,6 +7,22 @@
   "use strict";
   const U = SL.U;
 
+  /* 2-bone IK knee: returns the knee joint for a hip->foot limb so legs
+   * naturally bend instead of drawing as rigid straight lines. */
+  function ikKnee(hx, hy, fx, fy, seg, f) {
+    const dx = fx - hx, dy = fy - hy;
+    const d = Math.hypot(dx, dy) || 0.0001;
+    const len = Math.min(seg, d * 0.62);
+    if (d >= len * 2) {
+      return { x: hx + dx * 0.5, y: hy + dy * 0.5 };
+    }
+    const midX = (hx + fx) / 2, midY = (hy + fy) / 2;
+    const off = Math.sqrt(Math.max(0, len * len - (d / 2) * (d / 2)));
+    let nx = -dy / d, ny = dx / d;
+    if (nx * f > 0) { nx = -nx; ny = -ny; }
+    return { x: midX + nx * off, y: midY + ny * off };
+  }
+
   /* =================================================================
    * drawStickman — draws a procedural stick figure from joints.
    * o: { x, y (feet center), scale, facing, t (time), speed (0..1),
@@ -29,7 +45,7 @@
     const headR = 5.4 * s;
     const neckY = y - h * 0.74;
     const shoulderY = y - h * 0.66;
-    const hipY = y - h * 0.42;
+    let hipY = y - h * 0.42;
     const limbW = Math.max(1.6, h * 0.05);
     const torsoW = Math.max(2.2, h * 0.07);
 
@@ -52,6 +68,7 @@
     let feet = { fx: 0, fy: 0, bx: 0, by: 0 };
     let headPos = { x: cx, y: neckY - headR - 2 * s };
     let weaponAngle = 0;
+    let shX = cx, shY = shoulderY, hipX = cx;
 
     const walkPhase = t * 9 * (0.4 + speed * 0.6);
 
@@ -68,38 +85,78 @@
       };
       weaponAngle = -Math.PI * 0.75;
     } else if (pose === "run") {
-      const swing = Math.sin(walkPhase);
-      const lift = Math.max(0, Math.sin(walkPhase + Math.PI));
-      const lift2 = Math.max(0, Math.sin(walkPhase));
+      const ph = walkPhase;
+      const step = Math.sin(ph);
+      const step2 = Math.sin(ph + Math.PI);
+      const stride = h * 0.19;
+      const bob = Math.abs(step) * h * 0.03;
+      const lean = h * 0.05;
+      const fLift = (0.5 * (1 + Math.cos(2 * ph))) * h * 0.14;
+      const bLift = (0.5 * (1 + Math.cos(2 * (ph + Math.PI)))) * h * 0.14;
       feet = {
-        fx: cx + swing * h * 0.2 * f, fy: y - lift * h * 0.14,
-        bx: cx - swing * h * 0.2 * f, by: y - lift2 * h * 0.14,
+        fx: cx + step * stride * f, fy: y - fLift,
+        bx: cx - step * stride * f, by: y - bLift,
       };
+      shX = cx + lean * f;
+      shY = shoulderY + bob;
+      hipX = cx + lean * 0.55 * f;
+      hipY += bob;
       hands = {
-        fx: cx + h * 0.22 * f, fy: cy - h * 0.02 + Math.sin(walkPhase + Math.PI) * h * 0.05,
-        bx: cx - h * 0.16 * f, by: cy + h * 0.04 + Math.sin(walkPhase) * h * 0.05,
+        fx: shX + h * 0.2 * f + step2 * h * 0.04 * f, fy: shY - h * 0.02 + step2 * h * 0.06,
+        bx: shX - h * 0.14 * f + step * h * 0.03 * f, by: shY + h * 0.05 + step * h * 0.06,
       };
       weaponAngle = -Math.PI * 0.85;
-      headPos = { x: cx + h * 0.04 * f, y: neckY - headR };
+      headPos = { x: shX + h * 0.03 * f, y: neckY - headR + bob };
     } else if (pose === "attack" || pose === "heavy") {
       const isHeavy = pose === "heavy";
-      const swing = U.easeOutCubic(pt);
-      const wind = isHeavy ? 0.45 : 0.3;
-      let a0, a1;
-      if (isHeavy) { a0 = Math.PI * 0.55; a1 = -Math.PI * 0.85; }
-      else { a0 = Math.PI * 0.15; a1 = -Math.PI * 0.62; }
+      const wind = isHeavy ? 0.4 : 0.26;
+      const strikeEnd = wind + (1 - wind) * 0.62;
+      const a0 = isHeavy ? Math.PI * 0.62 : Math.PI * 0.42;
+      const a1 = isHeavy ? -Math.PI * 0.98 : -Math.PI * 0.76;
       let ang;
-      if (pt < wind) ang = U.lerp(a0, a0 + (a1 - a0) * 0.25, U.easeInQuad(pt / wind));
-      else ang = U.lerp(a0 + (a1 - a0) * 0.25, a1, U.easeOutQuad((pt - wind) / (1 - wind)));
+      if (pt < wind) {
+        ang = U.lerp(a0 + 0.18, a0, U.easeInQuad(pt / wind));
+      } else if (pt < strikeEnd) {
+        ang = U.lerp(a0, a1, U.easeOutCubic((pt - wind) / (strikeEnd - wind)));
+      } else {
+        ang = U.lerp(a1, a1 + 0.32, U.easeOutQuad((pt - strikeEnd) / (1 - strikeEnd)));
+      }
       weaponAngle = ang;
+      const swingAmt = pt < wind ? -(pt / wind) : (pt - wind) / (strikeEnd - wind);
+      const lean = (isHeavy ? 0.09 : 0.06) * h;
+      const lDip = (isHeavy ? 0.045 : 0.02) * h * Math.max(0, -Math.sin(ang));
+      shX = cx + swingAmt * lean * f;
+      shY = shoulderY + lDip;
+      hipX = cx + swingAmt * lean * 0.5 * f;
+      hipY += lDip * 0.6;
+      const reach = h * 0.27;
       hands = {
-        fx: cx + Math.cos(ang) * h * 0.26 * f, fy: cy + Math.sin(ang) * h * 0.26,
-        bx: cx - h * 0.14 * f, by: cy + h * 0.1,
+        fx: shX + Math.cos(ang) * reach * f,
+        fy: shY + Math.sin(ang) * reach,
+        bx: cx - h * 0.13 * f, by: shoulderY + h * 0.1,
       };
       feet = {
         fx: cx + (isHeavy ? -0.02 : 0.1) * h * f, fy: y,
         bx: cx - 0.12 * h * f, by: y,
       };
+      if (pt >= wind && pt < strikeEnd + 0.1) {
+        const arcP = U.clamp((pt - wind) / (strikeEnd - wind), 0, 1);
+        const arcA0 = a0 - 0.1, arcA1 = a1 + 0.3;
+        const arcR = h * (isHeavy ? 0.45 : 0.4);
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.3 * (1 - arcP);
+        ctx.strokeStyle = isHeavy ? "#ffd27a" : "#cfe7ff";
+        ctx.lineWidth = (isHeavy ? 4.5 : 3) * s;
+        ctx.beginPath();
+        for (let i = 0; i <= 14; i++) {
+          const a = U.lerp(arcA0, arcA1, i / 14);
+          const px = shX + Math.cos(a) * arcR * f;
+          const py = shY + Math.sin(a) * arcR;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
     } else if (pose === "cast") {
       const aim = pt * 0.3;
       weaponAngle = 0;
@@ -169,14 +226,20 @@
       return;
     }
 
-    const shX = cx, shY = shoulderY;
-    const hipX = cx;
-
     // ---- torso ----
     ctx.lineCap = "round";
     ctx.strokeStyle = bodyCol;
     ctx.lineWidth = torsoW;
     ctx.beginPath(); ctx.moveTo(hipX, hipY); ctx.lineTo(shX, shY); ctx.stroke();
+
+    // ---- legs (2-bone IK so knees bend naturally) ----
+    const legSeg = h * 0.22;
+    const kneeF = ikKnee(hipX, hipY, feet.fx, feet.fy, legSeg, f);
+    const kneeB = ikKnee(hipX, hipY, feet.bx, feet.by, legSeg, f);
+    ctx.strokeStyle = bodyCol;
+    ctx.lineWidth = limbW;
+    ctx.beginPath(); ctx.moveTo(hipX, hipY); ctx.lineTo(kneeF.x, kneeF.y); ctx.lineTo(feet.fx, feet.fy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(hipX, hipY); ctx.lineTo(kneeB.x, kneeB.y); ctx.lineTo(feet.bx, feet.by); ctx.stroke();
 
     // ---- head ----
     if (o.outfit && o.outfit.hood) {
@@ -275,7 +338,7 @@
     const col = w.color || "#cfe0ff";
     ctx.save();
     ctx.translate(hx, hy);
-    ctx.rotate(ang);
+    ctx.rotate(ang * f);
     ctx.lineCap = "round";
     if (kind === "sword") {
       const len = w.len || 30 * s;

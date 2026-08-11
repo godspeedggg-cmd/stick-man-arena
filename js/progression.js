@@ -12,7 +12,7 @@
       id: "warrior", name: "Warrior", icon: "\u2694", cost: 0,
       color: "#5fc8ff", weapon: "melee",
       desc: "A balanced fighter. The starting class of every legend.",
-      base: { maxHp: 110, dmg: 1, speed: 265, critChance: 0.05, critMul: 1.6, attackSpeed: 1, armor: 2, dashCd: 2.1 },
+      base: { maxHp: 110, dmg: 1.4, speed: 265, critChance: 0.05, critMul: 1.6, attackSpeed: 1, armor: 2, dashCd: 2.1 },
       special: { type: "spinslash", name: "Blade Arc", cooldown: 7, icon: "\u2749" },
       ultimate: { type: "bladeStorm", name: "Blade Storm", cooldown: 28, icon: "\u2694" },
       tags: ["balanced"],
