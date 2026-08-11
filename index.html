@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0e1a">
+<title>Stickman: Warrior's Legacy</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="game-root">
+
+  <canvas id="game-canvas"></canvas>
+
+  <!-- ===== HUD (gameplay overlay) ===== -->
+  <div id="hud" class="hidden">
+    <div id="hud-top">
+      <div class="hud-panel" id="hud-left">
+        <div class="hud-row">
+          <span class="hud-label">HP</span>
+          <div class="bar"><div id="hud-hp" class="bar-fill hp"></div></div>
+          <span id="hud-hp-text">100</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">XP</span>
+          <div class="bar xpbar"><div id="hud-xp" class="bar-fill xp"></div></div>
+          <span id="hud-lvl" class="hud-lvl">Lv 1</span>
+        </div>
+      </div>
+      <div class="hud-panel" id="hud-center">
+        <div id="hud-distance">0m</div>
+        <div id="hud-score">0</div>
+        <div id="hud-combo" class="hidden">x0</div>
+      </div>
+      <div class="hud-panel" id="hud-right">
+        <div id="hud-coins"><span class="coin-ico">&#9679;</span><span id="hud-coins-val">0</span></div>
+        <div id="hud-gems"><span class="gem-ico">&#9673;</span><span id="hud-gems-val">0</span></div>
+        <button id="btn-pause" class="icon-btn" aria-label="Pause">&#10074;&#10074;</button>
+      </div>
+    </div>
+
+    <div id="hud-boss" class="hidden">
+      <div class="boss-name" id="boss-name">BOSS</div>
+      <div class="bar bossbar"><div id="hud-boss-hp" class="bar-fill boss"></div></div>
+    </div>
+
+    <div id="hud-abilities">
+      <div class="ab-item" id="ab-special"><div class="ab-icon" id="ab-special-ico">&#9889;</div><div class="ab-cd" id="ab-special-cd"></div><span class="ab-key">E</span></div>
+      <div class="ab-item" id="ab-ultimate"><div class="ab-icon" id="ab-ultimate-ico">&#9733;</div><div class="ab-cd" id="ab-ultimate-cd"></div><span class="ab-key">Q</span></div>
+      <div class="ab-item" id="ab-dash"><div class="ab-icon" id="ab-dash-ico">&#10145;</div><div class="ab-cd" id="ab-dash-cd"></div><span class="ab-key">SHIFT</span></div>
+    </div>
+  </div>
+
+  <!-- ===== Touch controls (mobile) ===== -->
+  <div id="touch-controls" class="hidden">
+    <div id="joystick-zone">
+      <div id="joystick-base"><div id="joystick-knob"></div></div>
+    </div>
+    <div id="action-buttons">
+      <button class="tbtn jump" id="btn-jump" aria-label="Jump">&#8593;</button>
+      <button class="tbtn dash" id="btn-dash" aria-label="Dash">&#8594;</button>
+      <button class="tbtn heavy" id="btn-heavy" aria-label="Heavy">&#9876;</button>
+      <button class="tbtn attack" id="btn-attack" aria-label="Attack">&#9876;</button>
+      <button class="tbtn special" id="btn-special" aria-label="Special">&#9889;</button>
+      <button class="tbtn ultimate" id="btn-ultimate" aria-label="Ultimate">&#9733;</button>
+    </div>
+  </div>
+
+  <!-- ===== Screens (DOM overlays) ===== -->
+  <div id="screens">
+    <div id="screen-boot" class="screen">
+      <div class="boot-box">
+        <div class="boot-spinner"></div>
+        <p>Forging the blade...</p>
+      </div>
+    </div>
+    <div id="screen-main" class="screen hidden">
+      <div class="main-layout">
+        <div class="main-left">
+          <div class="logo-block">
+            <h1 class="game-title">STICKMAN</h1>
+            <h2 class="game-subtitle">WARRIOR'S LEGACY</h2>
+          </div>
+          <div class="main-buttons">
+            <button class="big-btn primary" id="btn-play">&#9654; PLAY</button>
+            <button class="big-btn" id="btn-warriors">&#129495; Warriors</button>
+            <button class="big-btn" id="btn-equipment">&#9878; Equipment</button>
+            <button class="big-btn" id="btn-upgrades">&#11088; Upgrades</button>
+            <button class="big-btn" id="btn-leaderboard">&#127942; Leaderboards</button>
+            <button class="big-btn" id="btn-challenges">&#127919; Challenges</button>
+            <button class="big-btn" id="btn-settings">&#9881; Settings</button>
+          </div>
+          <div class="main-resource-row">
+            <span class="res-coin"><span class="coin-ico">&#9679;</span><b id="main-coins">0</b></span>
+            <span class="res-gem"><span class="gem-ico">&#9673;</span><b id="main-gems">0</b></span>
+            <span class="res-xp"><span class="xp-ico">&#10022;</span><b id="main-xp">0</b></span>
+          </div>
+          <div style="margin-top:14px;display:flex;align-items:center;gap:8px;max-width:320px">
+            <button class="big-btn small" id="btn-weekly" style="flex:1">&#127919; WEEKLY CHALLENGE: OFF</button>
+          </div>
+        </div>
+        <div class="main-hero">
+          <canvas id="menu-hero-canvas" width="360" height="420"></canvas>
+        </div>
+      </div>
+    </div>
+    <div id="screen-loadout" class="screen hidden"></div>
+    <div id="screen-equip" class="screen hidden"></div>
+    <div id="screen-perm" class="screen hidden"></div>
+    <div id="screen-leaderboard" class="screen hidden"></div>
+    <div id="screen-challenges" class="screen hidden"></div>
+    <div id="screen-settings" class="screen hidden"></div>
+  </div>
+
+  <div id="modal-root"></div>
+
+  <div id="levelup-overlay" class="hidden">
+    <div class="levelup-box">
+      <h2 class="levelup-title">LEVEL UP!</h2>
+      <div id="levelup-cards"></div>
+    </div>
+  </div>
+
+  <div id="toast-root"></div>
+
+  <div id="death-screen" class="hidden">
+    <div class="death-box">
+      <h2 class="death-title">RUN OVER</h2>
+      <div id="death-stats"></div>
+      <div id="death-rewards" class="death-rewards"></div>
+      <div class="death-buttons">
+        <button class="big-btn primary" id="btn-death-replay">&#9654; PLAY AGAIN</button>
+        <button class="big-btn" id="btn-death-upgrades">&#11088; UPGRADES</button>
+        <button class="big-btn" id="btn-death-menu">&#127968; MAIN MENU</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pause-screen" class="hidden">
+    <div class="pause-box">
+      <h2 class="pause-title">PAUSED</h2>
+      <button class="big-btn primary" id="btn-resume">&#9654; RESUME</button>
+      <button class="big-btn" id="btn-pause-controls">&#9632; CONTROLS</button>
+      <button class="big-btn" id="btn-pause-settings">&#9881; SETTINGS</button>
+      <button class="big-btn danger" id="btn-quit-run">&#10006; QUIT RUN</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/utils.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/save.js"></script>
+<script src="js/input.js"></script>
+<script src="js/particles.js"></script>
+<script src="js/upgrades.js"></script>
+<script src="js/progression.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/bosses.js"></script>
+<script src="js/levels.js"></script>
+<script src="js/leaderboard.js"></script>
+<script src="js/challenges.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
