@@ -638,6 +638,16 @@
       setTimeout(() => el.remove(), 2700);
     },
 
+    banner(msg, kind) {
+      const root = $("game-root");
+      if (!root) { this.toast(msg, kind); return; }
+      const el = document.createElement("div");
+      el.className = "event-banner " + (kind || "");
+      el.textContent = msg;
+      root.appendChild(el);
+      setTimeout(() => el.remove(), 3600);
+    },
+
     confirm(title, msg, onOk) {
       const root = $("modal-root");
       const box = document.createElement("div");
@@ -651,6 +661,44 @@
       root.appendChild(box);
       $("modal-ok").addEventListener("click", () => { box.remove(); onOk(); });
       $("modal-cancel").addEventListener("click", () => box.remove());
+    },
+
+    showPathChoice(options, onPick) {
+      const root = $("modal-root");
+      const box = document.createElement("div");
+      box.className = "modal";
+      const cards = options.map((o, i) => `
+        <button class="path-card" data-path="${i}">
+          <div class="path-icon">${o.icon}</div>
+          <div class="path-body">
+            <div class="path-name">${o.name}</div>
+            <div class="path-desc">${o.desc}</div>
+            <div class="path-meta">
+              <span class="path-danger">DANGER ${o.danger.toFixed(1)}</span>
+              <span class="path-reward">REWARD ${o.reward.toFixed(1)}</span>
+            </div>
+          </div>
+        </button>`).join("");
+      box.innerHTML = `<div class="modal-box path-modal">
+        <h2 style="color:#7ef0a0">THE PATH DIVERGES</h2>
+        <p class="path-sub">Choose your road forward. Each path shapes the next stretch of the world.</p>
+        <div class="path-grid">${cards}</div>
+        <button class="big-btn" id="path-cancel">STAY AND FIGHT HERE</button>
+      </div>`;
+      root.appendChild(box);
+      box.querySelectorAll(".path-card").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          SL.Audio.play("click");
+          const o = options[+btn.dataset.path];
+          box.remove();
+          onPick(o);
+        });
+      });
+      $("path-cancel").addEventListener("click", () => {
+        SL.Audio.play("click");
+        box.remove();
+        onPick(null);
+      });
     },
 
     showControlsModal() {

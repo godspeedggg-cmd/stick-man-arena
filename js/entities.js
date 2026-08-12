@@ -438,6 +438,7 @@
       this.vx = 0; this.vy = 0;
       this.facing = 1;
       this.onGround = true;
+      this.platform = null;
       this.jumps = 1;
       this.dead = false;
       this.level = 1;
@@ -560,15 +561,22 @@
           this.airAtk = true;
         }
         this.y += this.vy * dt;
-        if (this.y >= g.groundY) {
+        const ground = g.resolveGround(this, this.y - this.vy * dt);
+        if (ground) {
           const wasAir = !this.onGround;
-          this.y = g.groundY;
+          this.y = ground.y;
           this.vy = 0;
           this.onGround = true;
           this.jumps = st.doubleJump ? 2 : 1;
+          this.platform = ground.platform || null;
+          // ice platforms slide (low friction)
+          if (this.platform && this.platform.kind === "ice") this.vx *= 0.92;
           if (wasAir && this.attack && this.attack.type === "air") {
             this.landSlam();
           }
+        } else {
+          this.onGround = false;
+          this.platform = null;
         }
       }
 
@@ -950,32 +958,32 @@
     grunt: {
       name: "Grunt", hp: 30, speed: 62, dmg: 9, xp: 6, scale: 1, color: "#9aa6bd",
       weapon: { kind: "sword", color: "#c0cada", len: 24 }, range: 52, cooldown: 1.4,
-      telegraph: 0.5, attackDur: 0.3, coins: 0.35,
+      telegraph: 0.5, attackDur: 0.3, coins: 0.35, detect: 430,
     },
     archer: {
       name: "Archer", hp: 24, speed: 48, dmg: 8, xp: 8, scale: 1, color: "#c98a5e",
       weapon: { kind: "bow", color: "#e0a86e", len: 22 }, range: 300, cooldown: 2.2,
-      telegraph: 0.65, attackDur: 0.2, coins: 0.3, ranged: true,
+      telegraph: 0.65, attackDur: 0.2, coins: 0.3, ranged: true, detect: 520,
     },
     shield: {
       name: "Shield Warrior", hp: 60, speed: 44, dmg: 11, xp: 10, scale: 1.05, color: "#5f7fd6",
       weapon: { kind: "sword", color: "#9cc4ff", len: 22 }, range: 56, cooldown: 1.8,
-      telegraph: 0.55, attackDur: 0.3, coins: 0.4, blocks: true,
+      telegraph: 0.55, attackDur: 0.3, coins: 0.4, blocks: true, detect: 430,
     },
     assassin: {
       name: "Assassin", hp: 26, speed: 130, dmg: 12, xp: 11, scale: 0.95, color: "#b04a6e",
       weapon: { kind: "dagger", color: "#e0809e", len: 16 }, range: 300, cooldown: 2.6,
-      telegraph: 0.45, attackDur: 0.25, coins: 0.35, lunges: true, hood: true,
+      telegraph: 0.45, attackDur: 0.25, coins: 0.35, lunges: true, hood: true, detect: 360,
     },
     tank: {
       name: "Tank", hp: 130, speed: 32, dmg: 16, xp: 16, scale: 1.3, color: "#6b4a52",
       weapon: { kind: "hammer", color: "#8a6a74", len: 26 }, range: 66, cooldown: 2.4,
-      telegraph: 0.8, attackDur: 0.4, coins: 0.5,
+      telegraph: 0.8, attackDur: 0.4, coins: 0.5, detect: 460,
     },
     mage: {
       name: "Mage", hp: 36, speed: 40, dmg: 13, xp: 13, scale: 1, color: "#8a5fc9",
       weapon: { kind: "staff", color: "#b08ae0", len: 26 }, range: 340, cooldown: 2.8,
-      telegraph: 0.9, attackDur: 0.2, coins: 0.35, ranged: true, hood: true, magic: true,
+      telegraph: 0.9, attackDur: 0.2, coins: 0.35, ranged: true, hood: true, magic: true, detect: 520,
     },
   };
 
@@ -998,9 +1006,11 @@
       this.x = x;
       this.y = game.groundY;
       this.vx = 0; this.vy = 0;
-      this.state = "approach";
+      this.state = "idle";
       this.stateT = 0;
       this.attackCd = 0;
+      this.onGround = true;
+      this.platform = null;
       this.hurtFlash = 0;
       this.staggerT = 0;
       this.slowT = 0; this.slowFactor = 1;
@@ -1010,6 +1020,14 @@
       this.facing = -1;
       this.xpValue = def.xp * (this.elite ? 5 : 1);
       this.id = U.uid();
+      this.aggro = false;
+      this.homeX = x;
+      this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+      this.retreatT = 0;
+      this.retreatDist = 0;
+      this.patrolT = Math.random() * 2;
+      this.patrolX = x;
+      this._throttleT = 0;
     }
 
     update(dt, game) {
@@ -1028,27 +1046,53 @@
         if (Math.abs(this.kbVx) < 2 && Math.abs(this.kbVy) < 2) { this.kbVx = 0; this.kbVy = 0; }
       }
 
-      this.facing = game.player.x > this.x ? 1 : -1;
-
       const player = game.player;
+      if (!player || player.dead) { this.vx = 0; this._ground(dt, game); this.updateDots(dt, game); return; }
+
+      this.facing = player.x > this.x ? 1 : -1;
+
       const dx = player.x - this.x;
       const dist = Math.abs(dx);
       const speedEff = this.speed * this.slowFactor * (this.staggerT > 0 ? 0.1 : 1);
+      const hint = game.director ? game.director.hintFor(this) : null;
+      const aggression = hint ? hint.aggression : 0.5;
+
+      // performance: off-screen enemies only reason at ~10Hz, keeps 60 FPS under hordes
+      if (dist > 1000) {
+        this._throttleT -= dt;
+        if (this._throttleT > 0) {
+          this.vx = 0;
+          this._ground(dt, game);
+          this.updateDots(dt, game);
+          return;
+        }
+        this._throttleT = 0.1;
+      }
+
+      // ----- detection / idle / patrol -----
+      if (!this.aggro) {
+        const detect = this.def.detect || 460;
+        if (dist < detect) {
+          this.aggro = true;
+          this.state = "detect";
+          this.stateT = 0;
+          game.audio.play("enemyWarn");
+        } else {
+          this._patrol(dt, speedEff);
+        }
+        this._ground(dt, game);
+        this.updateDots(dt, game);
+        return;
+      }
 
       switch (this.state) {
+        case "detect": {
+          this.vx = 0;
+          if (this.stateT >= 0.35) { this.state = "approach"; this.stateT = 0; }
+          break;
+        }
         case "approach": {
-          if (this.stateT > 0.2) {
-            this.vx = Math.sign(dx) * speedEff;
-            this.x += this.vx * dt;
-          }
-          if (this.def.lunges) {
-            // assassin keeps distance then dashes
-            if (dist > 420) { /* approach */ }
-            else if (dist < 260 && this.attackCd <= 0) { this.toTelegraph(); }
-            else { this.vx = Math.sign(dx) * speedEff * 0.5; this.x += this.vx * dt; }
-          } else if (dist <= this.def.range && this.attackCd <= 0) {
-            this.toTelegraph();
-          }
+          this._doApproach(dt, game, dx, dist, speedEff, hint, aggression);
           break;
         }
         case "telegraph": {
@@ -1076,25 +1120,144 @@
             this.x += this.lungeVx * dt;
           }
           if (this.stateT >= this.def.attackDur + 0.25) {
+            this.state = "recover";
+            this.stateT = 0;
+            this.attackCd = this.def.cooldown * U.rand(0.85, 1.2) * (game.director ? game.director.attackCdMul() : 1);
+            if (game.director) game.director.releaseAttack(this);
+          }
+          break;
+        }
+        case "recover": {
+          this.vx = 0;
+          const recoverT = (this.def.cooldown * 0.4) / Math.max(0.6, aggression);
+          if (this.stateT >= recoverT) {
+            if (this._shouldRetreat(game, dist, hint)) {
+              this.state = "retreat";
+              this.stateT = 0;
+              this.retreatT = 0.5 + Math.random() * 0.5;
+              this.retreatDist = dist + 140;
+            } else {
+              this.state = "approach";
+              this.stateT = 0;
+            }
+          }
+          break;
+        }
+        case "retreat": {
+          const away = Math.sign(dx);
+          this.vx = -away * speedEff * 0.7;
+          this.x += this.vx * dt;
+          if (this.stateT >= this.retreatT || dist > this.retreatDist) {
             this.state = "approach";
             this.stateT = 0;
-            this.attackCd = this.def.cooldown * U.rand(0.85, 1.2);
+          }
+          break;
+        }
+        case "chase": {
+          const spd = speedEff * (aggression > 0.7 ? 1.15 : 1);
+          this.vx = Math.sign(dx) * spd;
+          this.x += this.vx * dt;
+          if (this.stateT > 0.8) { this.state = "approach"; this.stateT = 0; }
+          if (dist <= this.def.range + 30 && this.attackCd <= 0 && this._wantAttack(game)) {
+            this.toTelegraph();
           }
           break;
         }
       }
 
-      // stay grounded-ish
-      if (this.y < game.groundY) {
-        this.vy += game.gravity * dt;
-        this.y += this.vy * dt;
-        if (this.y >= game.groundY) { this.y = game.groundY; this.vy = 0; }
-      } else {
-        this.y = game.groundY;
-      }
-
-      // dots
+      this._ground(dt, game);
       this.updateDots(dt, game);
+    }
+
+    /* ---------- state machine helpers ---------- */
+
+    _patrol(dt, speedEff) {
+      // wander around the spawn point until the player is detected
+      this.patrolT -= dt;
+      if (this.patrolT <= 0 || Math.abs(this.patrolX - this.x) < 6) {
+        this.patrolT = 1 + Math.random() * 2;
+        this.patrolX = this.homeX + (Math.random() - 0.5) * 260;
+      }
+      const d = this.patrolX - this.x;
+      this.vx = Math.sign(d) * speedEff * 0.4;
+      this.x += this.vx * dt;
+    }
+
+    _wantAttack(game) {
+      if (!game.director) return true;
+      return game.director.requestAttack(this);
+    }
+
+    _shouldRetreat(game, dist, hint) {
+      // player dodging through us -> give ground
+      if (game.director && game.director.react.dash > 0 && dist < 160) return true;
+      // hurt, non-elite enemies fall back (mixed difficulty)
+      const lowHp = this.hp < this.maxHp * 0.3;
+      if (lowHp && !this.elite && Math.random() < 0.4) return true;
+      // assassins never retreat; tanks never retreat
+      if (this.def.lunges) return false;
+      if (this.type === "tank") return false;
+      // player pushing hard -> back off briefly
+      if (game.director && game.director.react.press > 0 && dist < 120) return true;
+      return false;
+    }
+
+    _doApproach(dt, game, dx, dist, speedEff, hint, aggression) {
+      if (this.def.lunges) {
+        // assassin: circle the flank target, then lunge
+        const tx = hint && hint.targetX ? hint.targetX : game.player.x;
+        if (dist > 420) {
+          this.vx = Math.sign(game.player.x - this.x) * speedEff;
+          this.x += this.vx * dt;
+        } else if (dist < 260 && this.attackCd <= 0 && this._wantAttack(game)) {
+          this.toTelegraph();
+        } else {
+          const d = tx - this.x;
+          this.vx = Math.sign(d) * speedEff * 0.5;
+          this.x += this.vx * dt;
+        }
+      } else if (this.def.ranged) {
+        // ranged: hold preferred range, back off if the player closes
+        const keep = (hint && hint.keepRange) ? hint.keepRange : [this.def.range - 60, this.def.range + 60];
+        if (dist < keep[0]) {
+          this.vx = -Math.sign(dx) * speedEff * 0.65;
+        } else if (dist > keep[1]) {
+          this.vx = Math.sign(dx) * speedEff;
+        } else {
+          this.strafeDir *= (Math.random() < 0.02 ? -1 : 1);
+          this.vx = this.strafeDir * speedEff * 0.35;
+        }
+        this.x += this.vx * dt;
+        if (dist <= this.def.range + 40 && this.attackCd <= 0 && this._wantAttack(game)) {
+          this.toTelegraph();
+        }
+      } else {
+        // melee: close in (respecting role hint offsets), attack when in range
+        if (dist <= this.def.range && this.attackCd <= 0 && this._wantAttack(game)) {
+          this.toTelegraph();
+        } else {
+          const tx = (hint && hint.targetX) ? hint.targetX : game.player.x;
+          const d = tx - this.x;
+          this.vx = Math.sign(d) * speedEff;
+          this.x += this.vx * dt;
+        }
+      }
+    }
+
+    _ground(dt, game) {
+      const prevY = this.y;
+      this.vy += game.gravity * dt;
+      this.y += this.vy * dt;
+      const ground = game.resolveGround(this, prevY);
+      if (ground) {
+        this.y = ground.y;
+        this.vy = 0;
+        this.onGround = true;
+        this.platform = ground.platform || null;
+      } else {
+        this.onGround = false;
+        this.platform = null;
+      }
     }
 
     toTelegraph() {
@@ -1181,7 +1344,7 @@
     pose() {
       if (this.staggerT > 0 || this.kbVx !== 0) return "hurt";
       if (this.state === "attack") return "attack";
-      if (this.state === "telegraph") return "cast";
+      if (this.state === "telegraph" || this.state === "detect") return "cast";
       if (Math.abs(this.vx) > 20) return "run";
       return "idle";
     }
@@ -1239,7 +1402,7 @@
       };
       drawStickman(ctx, {
         x: this.x, y: this.y, scale: this.scale, facing: this.facing, t: time,
-        speed: this.state === "attack" || this.state === "telegraph" ? 0 : 0.6,
+        speed: this.state === "attack" || this.state === "telegraph" || this.state === "detect" || this.state === "recover" ? 0 : 0.6,
         pose: this.pose(), poseT: this.state === "attack" ? Math.min(1, this.stateT / this.def.attackDur) : 0,
         color: def.color, weapon: def.weapon,
         shield: this.type === "shield", outfit, alpha,

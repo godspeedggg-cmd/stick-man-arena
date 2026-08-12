@@ -275,6 +275,12 @@
       this.faded = 0;
       this.id = U.uid();
       this.staggerT = 0;
+      this.defensiveT = 0;
+      this.enraged = false;
+      this.patternCount = {};
+      this.countered = {};
+      this.hitsDuringTelegraph = 0;
+      this.bornT = game.timeSurvived;
     }
 
     audio(n) { this.game.audio.play(n); }
@@ -304,11 +310,21 @@
       // phase check
       if (this.phase === 1 && this.hp <= this.maxHp * 0.5) {
         this.phase = 2;
+        this.enraged = true;
         game.toast(this.name + " enrages!", "boss");
         game.audio.play("bossWarn");
         game.particles.shock(this.x, this.y - 80, "#ff5252", 70);
         game.screenShake(10, 0.4);
       }
+      // soft enrage if the fight drags on
+      if (!this.enraged && game.timeSurvived - this.bornT > 30) {
+        this.enraged = true;
+        game.toast(this.name + " grows impatient!", "boss");
+      }
+
+      // defensive reaction: player dashing aggressively makes the boss back off
+      if (this.defensiveT > 0) this.defensiveT -= dt;
+      if (game.director && game.director.react.dash > 0) this.defensiveT = Math.max(this.defensiveT, 0.8);
 
       switch (this.state) {
         case "intro": {
@@ -321,27 +337,42 @@
           break;
         }
         case "idle": {
-          // slowly approach player but keep distance
           const dx = game.player.x - this.x;
           const dist = Math.abs(dx);
+          const speed = this.def.speed * (this.phase === 2 ? 1.3 : 1) * (this.enraged ? 1.15 : 1);
+          if (this.defensiveT > 0) {
+            // back away from a dashing player, refuse to commit to an attack
+            this.vx = -Math.sign(dx) * speed * 0.8;
+            this.x += this.vx * dt;
+            this.attackCd = Math.max(this.attackCd, 0.25);
+            break;
+          }
           if (dist > 260) {
-            this.vx = Math.sign(dx) * this.def.speed * (this.phase === 2 ? 1.3 : 1);
+            this.vx = Math.sign(dx) * speed;
             this.x += this.vx * dt;
           } else if (dist < 120) {
-            this.vx = -Math.sign(dx) * this.def.speed * 0.5;
+            this.vx = -Math.sign(dx) * speed * 0.5;
             this.x += this.vx * dt;
           }
-          this.attackCd -= dt;
+          this.attackCd -= dt * (this.enraged ? 1.15 : 1);
           if (this.attackCd <= 0) {
             const pool = this.attacksPool;
-            let pick = U.choose(pool);
-            // avoid repeating
-            if (this.lastAttack && pool.length > 1) {
-              while (pick.a === this.lastAttack) pick = U.choose(pool);
+            // adaptive weighted pick: avoid repetition, vary used moves,
+            // and de-prioritize attacks the player keeps countering
+            let best = null;
+            for (const x of pool) {
+              let w = 1;
+              if (this.lastAttack === x.a) w *= 0.35;
+              if (this.patternCount[x.a] > 2) w *= 0.7;
+              if (this.countered[x.a] > 0) w *= Math.max(0.4, 1 - this.countered[x.a] * 0.2);
+              if (this.hitsDuringTelegraph >= 3 && x.d.telegraph > 0.6) w *= 0.85;
+              w *= U.rand(0.75, 1.25);
+              if (!best || w > best.w) best = { a: x.a, d: x.d, w };
             }
-            this.lastAttack = pick.a;
-            const d = pick.d;
-            this.attack = { id: pick.a, t: 0, dur: d.dur, def: d, data: {} };
+            this.lastAttack = best.a;
+            this.patternCount[best.a] = (this.patternCount[best.a] || 0) + 1;
+            const d = best.d;
+            this.attack = { id: best.a, t: 0, dur: d.dur, def: d, data: {} };
             this.state = "telegraph";
             this.stateT = 0;
             d.start(this, game);
@@ -391,6 +422,10 @@
       this.hurtFlash = 0.12;
       if (opts.knock) { this.x += opts.knock.x * 0.1; }
       if (opts.stun) this.staggerT = Math.max(this.staggerT, opts.stun);
+      if (this.state === "telegraph" && this.attack) {
+        this.hitsDuringTelegraph++;
+        this.countered[this.attack.id] = (this.countered[this.attack.id] || 0) + 1;
+      }
       if (opts.burn) this.addDot("fire", opts.burn.dps, opts.burn.dur);
       if (opts.poison) this.addDot("poison", opts.poison.dps, opts.poison.dur);
       if (opts.slow) { /* boss resist slow */ }

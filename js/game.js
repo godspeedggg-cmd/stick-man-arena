@@ -35,6 +35,8 @@
       this.player = null;
       this.warrior = null;
       this.enemies = [];
+      this.director = new SL.Aidirector.Aidirector(this);
+      this.worldGen = new SL.WorldGen.WorldGen(this);
       this.projectiles = [];
       this.enemyProjectiles = [];
       this.pickups = [];
@@ -45,6 +47,10 @@
       this.lavaPools = [];
       this.boss = null;
       this.ultFx = null;
+      this.activePlatforms = [];
+      this.dynamicHazards = [];
+      this.enteredSegs = new Set();
+      this.darkness = null;
 
       // run stats
       this.distance = 0;
@@ -155,6 +161,8 @@
 
       // reset world
       this.enemies = [];
+      this.director.reset();
+      this.worldGen.setSeed(this.seed);
       this.projectiles = [];
       this.enemyProjectiles = [];
       this.pickups = [];
@@ -165,6 +173,10 @@
       this.lavaPools = [];
       this.boss = null;
       this.ultFx = null;
+      this.activePlatforms = [];
+      this.dynamicHazards = [];
+      this.enteredSegs = new Set();
+      this.darkness = null;
 
       this.distance = 0;
       this.score = 0;
@@ -357,16 +369,26 @@
       this.distance = this.scrollX / 60;
 
       /* player */
+      this._updatePlatforms(dt);
       p.update(dt);
 
       /* clamp player within view */
       p.x = U.clamp(p.x, this.scrollX + 70, this.scrollX + this.viewW - 110);
 
+      /* locked gates stop progress */
+      this._gateClamp();
+
       /* zone / boss logic */
       this._zoneLogic();
 
+      /* worldgen segments (encounters, gates, events, features) */
+      this._updateWorldSegments(dt);
+
       /* spawning */
       this._spawnLogic(dt);
+
+      /* combat director (coordination, roles, events) */
+      this.director.update(dt);
 
       /* dash hit damage */
       if (p.dashTimer > 0) {
@@ -381,6 +403,29 @@
               this.dealDamage(e, this._meleeDmg(0.8), { fromPlayer: true, effects: true, forceBurn: true });
               this.puff(e.x, e.y - 30, "#ff7b2e", 6);
             }
+          }
+        }
+      }
+
+      /* melee hit resolution — apply active player attack hitboxes */
+      if (p.attack && !p.dead) {
+        const hbs = p.activeHitboxes();
+        for (const hb of hbs) {
+          let hitCount = 0;
+          const pierce = hb.pierce || 1;
+          for (const e of this.enemies) {
+            if (e.dead) continue;
+            if (p.attack.hits.has(e.id)) continue;
+            if (!this._inMeleeArc(p, hb, e)) continue;
+            p.attack.hits.add(e.id);
+            const dmg = this._meleeDmg(hb.dmgMul);
+            this.dealDamage(e, dmg, {
+              fromPlayer: true, effects: true,
+              knock: { x: p.facing * hb.knock, y: (hb.type === "air" || hb.type === "airHeavy") ? 220 : -50 },
+            });
+            this.puff(e.x, e.y - 30, "#ffe1ea", 4);
+            hitCount++;
+            if (hitCount >= pierce) break;
           }
         }
       }
@@ -626,6 +671,145 @@
       this.boss.hp = this.boss.maxHp;
       SL.Audio.play("bossWarn");
       this.screenShake(6, 0.5);
+    }
+
+    /* ================= worldgen segments ================= */
+    _updateWorldSegments(dt) {
+      const p = this.player;
+      if (!p || p.dead) return;
+      const x0 = this.scrollX - 40, x1 = this.scrollX + this.viewW + 40;
+      const segs = this.worldGen.segmentsInRange(x0, x1);
+      let activeDark = null;
+
+      for (const seg of segs) {
+        /* entering a segment: spawn its encounter, fire events */
+        if (!this.enteredSegs.has(seg.idx)) {
+          this.enteredSegs.add(seg.idx);
+          if (seg.encounter && !this.boss) this.director.applyEncounterToSegment(seg);
+          if (seg.event) this.director.triggerEvent(seg.event, seg.x0 + (seg.x1 - seg.x0) / 2);
+          if (seg.rewards) seg._rewardReady = true;
+          /* junction: offer a branching path choice */
+          if (seg.junction && !this.boss && !seg.junction.offered) {
+            seg.junction.offered = true;
+            this._offerPathChoice(seg);
+          }
+        }
+
+        /* locked gates open once their guards are dead */
+        if (seg.gate && !seg.gate.bossGate && seg.gate.locked && !seg.gate.open) {
+          const cleared = !(seg.spawned && seg.spawned.some((id) =>
+            this.enemies.some((e) => e.id === id && !e.dead)));
+          if (cleared) {
+            seg.gate.open = true;
+            this.toast("The gate grinds open!", "zone");
+            SL.Audio.play("bossWarn");
+          }
+        }
+
+        /* rockfall feature */
+        if (seg.feature && seg.feature.type === "rockfall") {
+          seg.rockT = (seg.rockT || 0) + dt;
+          if (seg.rockT > seg.feature.interval) {
+            seg.rockT = 0;
+            const spot = U.choose(seg.feature.spots);
+            this.groundTelegraphs.push({ type: "falling", spots: [{ x: spot, delay: 0 }], t: 0, color: "#b08a5e" });
+          }
+        }
+
+        /* darkness feature */
+        if (seg.feature && seg.feature.type === "darkness") {
+          if (p.x >= seg.x0 && p.x <= seg.x1) activeDark = seg;
+        }
+
+        /* wind feature */
+        if (seg.feature && seg.feature.type === "wind" && p.x >= seg.feature.x && p.x <= seg.feature.x + seg.feature.w) {
+          const push = seg.feature.dir * seg.feature.strength * 420;
+          p.x += push * dt;
+          for (const e of this.enemies) {
+            if (e.x >= seg.feature.x && e.x <= seg.feature.x + seg.feature.w) e.x += push * 0.6 * dt;
+          }
+        }
+
+        /* reward caches trigger when the player reaches their center */
+        if (seg.rewards && seg._rewardReady) {
+          const cx = seg.x0 + (seg.x1 - seg.x0) / 2;
+          if (Math.abs(p.x - cx) < 170) {
+            seg._rewardReady = false;
+            this._dropRewards(seg.rewards, cx);
+          }
+        }
+
+        /* explosive barrels */
+        for (const b of seg.barrels) {
+          if (b.broken) continue;
+          if (this._barrelHit(b)) {
+            b.broken = true;
+            this.damageArea(b.x, b.y - 20, 95, 0.85, 240, {});
+            SL.Particles.burst(b.x, b.y - 20, "#ff7b2e", 16, 260, 4, 0.5, 0);
+            SL.Particles.smoke(b.x, b.y - 20, "#444", 8);
+            this.screenShake(4, 0.3);
+            SL.Audio.play("explosion");
+          }
+        }
+      }
+      this.darkness = activeDark ? { x: activeDark.x0, w: activeDark.x1 - activeDark.x0 } : null;
+    }
+
+    _gateClamp() {
+      const gate = this._nearestLockedGate();
+      if (!gate) return;
+      const maxScroll = Math.max(0, gate.x - this.viewW + 100);
+      if (this.scrollX > maxScroll) this.scrollX = maxScroll;
+      if (this.player && this.player.x > gate.x - 26) this.player.x = gate.x - 26;
+    }
+
+    _nearestLockedGate() {
+      const x0 = this.scrollX - 200, x1 = this.scrollX + this.viewW + 60;
+      const segs = this.worldGen.segmentsInRange(x0, x1);
+      let best = null, bx = Infinity;
+      for (const seg of segs) {
+        if (!seg.gate || seg.gate.bossGate || !seg.gate.locked || seg.gate.open) continue;
+        if (seg.gate.x < bx && seg.gate.x > this.scrollX - 300) { bx = seg.gate.x; best = seg.gate; }
+      }
+      return best;
+    }
+
+    _barrelHit(b) {
+      const p = this.player;
+      if (!p || p.dead || !p.attack) return false;
+      const hbs = p.activeHitboxes();
+      for (const hb of hbs) {
+        const d = U.dist(hb.x, hb.y, b.x, b.y - 20);
+        if (d < hb.radius + b.w) return true;
+      }
+      return false;
+    }
+
+    _offerPathChoice(seg) {
+      if (this.state !== "playing") return;
+      this.state = "path";
+      const options = this.worldGen.offerPath(seg);
+      SL.UI.showPathChoice(options, (opt) => this._resolvePathChoice(opt));
+    }
+
+    _resolvePathChoice(option) {
+      if (this.state !== "path") return;
+      this.state = "playing";
+      if (option) this.worldGen.applyPath(this, option);
+    }
+
+    _dropRewards(r, x) {
+      for (let i = 0; i < (r.coins || 0); i++) {
+        this.spawnPickup("coin", x + (Math.random() - 0.5) * 170, this.groundY - 30 - Math.random() * 50);
+      }
+      for (let i = 0; i < (r.gems || 0); i++) {
+        this.spawnPickup("gem", x + (Math.random() - 0.5) * 130, this.groundY - 40 - Math.random() * 60);
+      }
+      for (let i = 0; i < (r.xp || 0); i++) {
+        this.spawnPickup("xp", x + (Math.random() - 0.5) * 150, this.groundY - 40 - Math.random() * 70);
+      }
+      SL.Particles.burst(x, this.groundY - 40, "#ffd75e", 12, 180, 3, 0.5, 0);
+      SL.Audio.play("coin");
     }
 
     _spawnLogic(dt) {
@@ -887,6 +1071,7 @@
     onEnemyKilled(e) {
       this.kills++;
       if (e.elite) this.elitesKilled++;
+      if (this.director) this.director.notifyKill(e);
       this.combo++;
       this.comboTime = 3.2;
       this.maxCombo = Math.max(this.maxCombo, this.combo);
@@ -1000,7 +1185,7 @@
       const p = this.player;
       if (!p || p.dead || p.iFrames > 0) return;
       const x0 = this.scrollX - 40, x1 = this.scrollX + this.viewW + 40;
-      const hazards = this.levelGen.hazardsInRange(x0, x1);
+      const hazards = this.levelGen.hazardsInRange(x0, x1).concat(this.worldGen.hazardsInRange(x0, x1));
       for (const hz of hazards) {
         if (hz.type === "firejet") {
           const period = 3.2;
@@ -1034,6 +1219,16 @@
     }
 
     /* ================= helpers ================= */
+    _inMeleeArc(p, hb, e) {
+      const ex = e.x, ey = e.y - 30 * e.scale;
+      const radius = hb.radius + e.w * 0.5;
+      if (U.dist(hb.x, hb.y, ex, ey) > radius) return false;
+      // generous front cone (~222°), mirrored by facing
+      let ang = U.angleTo(p.x, p.y - 30, ex, ey);
+      if (p.facing < 0) ang = Math.atan2(ey - (p.y - 30), -(ex - p.x));
+      return Math.abs(ang) <= Math.PI * 0.62;
+    }
+
     nearestEnemy(x, y, range) {
       let best = null, bd = range;
       for (const e of this.enemies) {
@@ -1070,6 +1265,231 @@
       else this.shake.mag = 0;
     }
 
+    /* ================= dynamic platforms ================= */
+    _updatePlatforms(dt) {
+      const plats = this.worldGen.platformsInRange(this.scrollX - 60, this.scrollX + this.viewW + 420);
+      for (const p of plats) {
+        if (p.collapsed) continue;
+        // moving platforms
+        if (p.move) {
+          if (p.baseY === undefined) { p.baseY = p.y; p.baseX = p.x; }
+          p.osc = (p.osc || 0) + dt * p.move.speed;
+          const ph = p.move.phase || 0;
+          if (p.move.axis === "y") p.y = p.baseY + Math.sin(p.osc + ph) * p.move.amp;
+          else if (p.move.axis === "x") p.x = p.baseX + Math.sin(p.osc + ph) * p.move.amp;
+        }
+        // collapsing bridges
+        if (p.collapse) {
+          if (this._entityOnPlatform(p)) {
+            p.collapseT = (p.collapseT || 0) + dt;
+            if (p.collapseT > 0.55) {
+              p.collapsed = true;
+              this.screenShake(3, 0.2);
+              SL.Particles.burst(p.x + p.w / 2, p.y, "#8a8f9c", 10, 160, 3, 0.4, 0);
+              this.audio.play("rock");
+            }
+          } else {
+            p.collapseT = 0;
+          }
+        }
+      }
+      this.activePlatforms = plats;
+    }
+
+    resolveGround(ent, prevY) {
+      // ground plane
+      if (ent.y >= this.groundY) return { y: this.groundY, platform: null };
+      const halfW = (ent.w || 20) / 2;
+      // ride a platform from last frame: follow its vertical movement
+      // (only while not moving upward away from it — lets jumps escape)
+      if (ent.platform && !ent.platform.collapsed && ent.vy >= 0) {
+        const p = ent.platform;
+        if (ent.x + halfW > p.x && ent.x - halfW < p.x + p.w) {
+          return { y: p.y, platform: p };
+        }
+      }
+      // worldgen platforms (top surface landing)
+      let best = null, bestY = -1e9;
+      for (const p of this.activePlatforms) {
+        if (p.collapsed) continue;
+        if (ent.x + halfW < p.x || ent.x - halfW > p.x + p.w) continue;
+        if (ent.y >= p.y && prevY <= p.y) {
+          if (p.y > bestY) { bestY = p.y; best = p; }
+        }
+      }
+      return best ? { y: best.y, platform: best } : null;
+    }
+
+    _entityOnPlatform(p) {
+      const pl = this.player;
+      if (pl && !pl.dead && pl.onGround && this._overlapsPlatform(pl, p)) return true;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        if (e.onGround && this._overlapsPlatform(e, p)) return true;
+      }
+      return false;
+    }
+
+    _overlapsPlatform(ent, p) {
+      const halfW = (ent.w || 20) / 2;
+      return ent.x + halfW > p.x && ent.x - halfW < p.x + p.w && Math.abs(ent.y - p.y) < 4;
+    }
+
+    _drawPlatform(ctx, p, time) {
+      const colors = {
+        stone: ["#3a3e4a", "#6a7080", "#4a4f5c"],
+        wood: ["#54371f", "#8a6138", "#6b4a2e"],
+        bridge: ["#46301e", "#7a5534", "#5c4028"],
+        ice: ["#8fd0e8", "#dff6ff", "#bfe9f5"],
+      }[p.kind] || ["#3a3e4a", "#6a7080", "#4a4f5c"];
+      const shaking = p.collapse && (p.collapseT || 0) > 0.2 && Math.floor(time * 30) % 2 === 0;
+      const x = p.x + (shaking ? (Math.random() - 0.5) * 3 : 0);
+      const y = p.y + (shaking ? (Math.random() - 0.5) * 2 : 0);
+      ctx.fillStyle = colors[1];
+      ctx.fillRect(x, y, p.w, 16);
+      ctx.fillStyle = colors[2];
+      ctx.fillRect(x, y + 6, p.w, 10);
+      ctx.fillStyle = colors[0];
+      ctx.fillRect(x, y, p.w, 3);
+    }
+
+    _drawWorldDecos(ctx, time) {
+      const x0 = this.scrollX - 60, x1 = this.scrollX + this.viewW + 60;
+      const decos = this.worldGen.decosInRange(x0, x1);
+      for (const d of decos) {
+        const gy = this.groundY;
+        switch (d.type) {
+          case "tree": case "iceTree": {
+            ctx.fillStyle = d.type === "iceTree" ? "#cfeef7" : "#2e5a3a";
+            ctx.fillRect(d.x + d.w * 0.42, gy - d.h * 0.72, d.w * 0.16, d.h * 0.72);
+            ctx.beginPath();
+            ctx.arc(d.x + d.w / 2, gy - d.h * 0.78, d.w * 0.5, 0, U.TAU);
+            ctx.fill();
+            break;
+          }
+          case "cactus": {
+            ctx.fillStyle = "#3e7a3a";
+            ctx.fillRect(d.x + d.w * 0.4, gy - d.h, d.w * 0.2, d.h);
+            ctx.fillRect(d.x + d.w * 0.1, gy - d.h * 0.55, d.w * 0.3, 7);
+            ctx.fillRect(d.x + d.w * 0.6, gy - d.h * 0.7, d.w * 0.3, 7);
+            break;
+          }
+          case "rock": {
+            ctx.fillStyle = "#6a6f78";
+            ctx.beginPath();
+            ctx.arc(d.x + d.w / 2, gy, d.w * 0.5, Math.PI, 0);
+            ctx.fill();
+            break;
+          }
+          case "wall": {
+            ctx.fillStyle = "#3d4250";
+            ctx.fillRect(d.x, gy - d.h, d.w, d.h);
+            ctx.fillStyle = "#575d6e";
+            ctx.fillRect(d.x, gy - d.h, d.w, 6);
+            break;
+          }
+          case "pillar": {
+            ctx.fillStyle = d.broken ? "#4a4f5c" : "#6a7080";
+            ctx.fillRect(d.x, gy - d.h, d.w, d.h);
+            ctx.fillStyle = "#8a90a0";
+            ctx.fillRect(d.x, gy - d.h, d.w, 4);
+            if (d.broken) {
+              ctx.fillStyle = "#4a4f5c";
+              ctx.fillRect(d.x - 4, gy - d.h * 0.7, 7, 10);
+              ctx.fillRect(d.x + d.w - 3, gy - d.h * 0.4, 7, 10);
+            }
+            break;
+          }
+          case "chest": {
+            ctx.fillStyle = "#7a5a24";
+            ctx.fillRect(d.x, gy - d.h, d.w, d.h);
+            ctx.fillStyle = "#e0b84a";
+            ctx.fillRect(d.x, gy - d.h, d.w, d.h * 0.4);
+            ctx.fillRect(d.x + d.w / 2 - 2, gy - d.h, 4, d.h);
+            break;
+          }
+        }
+      }
+    }
+
+    _drawWorldHazards(ctx, time) {
+      const x0 = this.scrollX - 40, x1 = this.scrollX + this.viewW + 40;
+      const hzs = this.worldGen.hazardsInRange(x0, x1);
+      const gy = this.groundY;
+      for (const hz of hzs) {
+        switch (hz.type) {
+          case "spikes": case "spikewall": case "cactus": case "icecrystal": case "rootspike": {
+            const n = hz.n || 2;
+            const color = hz.type === "cactus" ? "#4a8a3a" : hz.type === "icecrystal" ? "#bfe9f5" : hz.type === "rootspike" ? "#5a4a3a" : "#9aa2b0";
+            ctx.fillStyle = color;
+            for (let i = 0; i < n; i++) {
+              const sx = hz.x + i * (hz.w / n);
+              ctx.beginPath();
+              ctx.moveTo(sx, gy);
+              ctx.lineTo(sx + hz.w / n / 2, gy - hz.h);
+              ctx.lineTo(sx + hz.w / n, gy);
+              ctx.fill();
+            }
+            break;
+          }
+          case "lava": {
+            const pulse = 0.5 + Math.sin(time * 6 + hz.x) * 0.15;
+            ctx.fillStyle = U.rgba(255, 80, 20, pulse);
+            ctx.fillRect(hz.x, gy - 4, hz.w, 10);
+            ctx.fillStyle = "#ffd75e";
+            ctx.fillRect(hz.x, gy - 4, hz.w, 3);
+            break;
+          }
+          case "firejet": {
+            const period = 3.2;
+            const phase = ((time + hz.phase * period) % period) / period;
+            if (phase > 0.85) {
+              const f = (phase - 0.85) / 0.15;
+              ctx.fillStyle = U.rgba(255, 120, 30, 0.5 + f * 0.5);
+              ctx.fillRect(hz.x - 6, gy - 90 * f, 18, 90 * f + 6);
+              ctx.fillStyle = U.rgba(255, 220, 90, 0.7 * f);
+              ctx.fillRect(hz.x - 4, gy - 70 * f, 14, 70 * f + 4);
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    _drawBarrels(ctx, time) {
+      const x0 = this.scrollX - 60, x1 = this.scrollX + this.viewW + 60;
+      const bars = this.worldGen.barrelsInRange(x0, x1);
+      const gy = this.groundY;
+      for (const b of bars) {
+        if (b.broken) continue;
+        ctx.fillStyle = "#8a4a2e";
+        ctx.fillRect(b.x, gy - b.h, b.w, b.h);
+        ctx.fillStyle = "#c96b42";
+        ctx.fillRect(b.x, gy - b.h, b.w, 5);
+        ctx.fillRect(b.x, gy - b.h * 0.5, b.w, 4);
+        ctx.fillStyle = "#ff7b2e";
+        ctx.fillRect(b.x + b.w * 0.38, gy - b.h * 0.62, b.w * 0.24, 5);
+        // warning shimmer
+        if (Math.floor(time * 6) % 2 === 0) {
+          ctx.fillStyle = "rgba(255,120,40,0.25)";
+          ctx.beginPath(); ctx.arc(b.x + b.w / 2, gy - b.h / 2, 12, 0, U.TAU); ctx.fill();
+        }
+      }
+    }
+
+    _drawDarkness(ctx, viewW, viewH) {
+      if (!this.darkness) return;
+      const p = this.player;
+      const cx = p ? p.x : this.scrollX + viewW / 2;
+      const cy = p ? p.y - 40 : this.groundY - 60;
+      const grad = ctx.createRadialGradient(cx, cy, 60, cx, cy, 340);
+      grad.addColorStop(0, "rgba(3,5,12,0.15)");
+      grad.addColorStop(0.6, "rgba(3,5,12,0.72)");
+      grad.addColorStop(1, "rgba(3,5,12,0.92)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(this.scrollX, -40, viewW, viewH + 80);
+    }
+
     flash(color) {
       this.flashT = 0.2;
       this.flashColor = color || "#ffffff";
@@ -1077,6 +1497,10 @@
 
     toast(msg, kind) {
       SL.UI.toast(msg, kind);
+    }
+
+    banner(msg, kind) {
+      SL.UI.banner(msg, kind);
     }
 
     /* ================= clone update ================= */
@@ -1137,6 +1561,16 @@
       // background
       this.levelGen.drawBackground(ctx, this.elapsed, scrollX, viewW, viewH, this.groundY);
       this.levelGen.drawDecos(ctx, this.elapsed, scrollX, viewW, viewH, this.groundY);
+
+      // worldgen platforms
+      for (const p of this.activePlatforms) {
+        if (p.collapsed) continue;
+        this._drawPlatform(ctx, p, this.elapsed);
+      }
+      // worldgen decos / hazards / barrels
+      this._drawWorldDecos(ctx, this.elapsed);
+      this._drawBarrels(ctx, this.elapsed);
+      this._drawWorldHazards(ctx, this.elapsed);
 
       // ground telegraphs
       for (const gt of this.groundTelegraphs) {
@@ -1265,6 +1699,9 @@
 
       // particles
       SL.Particles.render(ctx);
+
+      // darkness (tunnel rooms)
+      this._drawDarkness(ctx, viewW, viewH);
 
       // zone tint vignette
       this._drawVignette(ctx, viewW, viewH);
