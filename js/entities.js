@@ -462,6 +462,13 @@
       this.buffs = {};
       this.spinAnim = 0;
       this.attackHoldT = 0;
+      this.victoryT = 0;
+      this.hurtT = 0;
+      this.hurtDur = 0.3;
+      this.hurtDir = 1;
+      this.landT = 0;
+      this.dashRecoverT = 0;
+      this.animator = window.SL.Anim ? new window.SL.Anim.PlayerAnimator(this, warrior) : null;
     }
 
     _xpNeed(lvl) { return Math.round(12 * Math.pow(lvl, 1.5) + 8); }
@@ -500,6 +507,9 @@
       if (this.spinAnim > 0) this.spinAnim -= dt;
       if (this.heavyCd > 0) this.heavyCd -= dt;
       if (this.attackHoldT > 0) this.attackHoldT -= dt;
+      if (this.victoryT > 0) this.victoryT -= dt;
+      if (this.hurtT > 0) this.hurtT -= dt;
+      if (this.landT > 0) this.landT -= dt;
       if (st.aegis > 0) {
         this.aegisTimer -= dt;
         if (this.aegisTimer <= 0) {
@@ -524,6 +534,10 @@
         this.vx = this.dashDir * g.dashSpeed * (this.stats.dashDistMul * 0.5 + 0.5);
         this.x += this.vx * dt;
         g.particles.trail(this.x - this.dashDir * 10, this.y - 30, this.warrior.color, 5);
+        if (this.dashTimer <= 0) this.dashRecoverT = 0.14;
+      } else if (this.dashRecoverT > 0) {
+        this.dashRecoverT -= dt;
+        this.vx *= 0.85;
       } else {
         let mx = inp.getAxisX();
         if (inp.isDown("left")) mx = -1;
@@ -544,6 +558,7 @@
       /* -------- vertical -------- */
       if (!this.dead) {
         this.vy += g.gravity * dt;
+        this.vyBeforeLand = this.vy;
         const jp = inp.wasPressed("jump");
         if (jp && this.onGround) {
           this.vy = -g.jumpVel * st.jumpMul;
@@ -574,6 +589,14 @@
           if (wasAir && this.attack && this.attack.type === "air") {
             this.landSlam();
           }
+          if (wasAir) {
+            this.landT = 0.18;
+            if (Math.abs(this.vyBeforeLand) > 1300) {
+              g.screenShake(5.5, 0.2);
+              g.particles.burst(this.x, this.y, "#cfd8e8", 10, 220, 3, 0.4, 300);
+            }
+          }
+          this.vyBeforeLand = 0;
         } else {
           this.onGround = false;
           this.platform = null;
@@ -633,23 +656,37 @@
       if (canAct && inp.wasPressed("ultimate") && this.ultCd <= 0 && this.castTimer <= 0) {
         this.useUltimate();
       }
+
+      /* -------- animation (visual only) -------- */
+      if (this.animator) this.animator.update(dt);
     }
 
     startAttack(type) {
       const st = this.stats;
       const aspd = 1 + (st.attackSpeedMul - 1) * (1 + (this.game.run.synFrenzy ? Math.min(1, this.game.combo / 100) * 0.5 : 0));
+      let combo = 0;
       if (type === "light") {
-        const combo = this.attackChain % 3;
-        const dur = (combo === 2 ? 0.34 : 0.26) / aspd;
-        this.attack = { type: "light", t: 0, dur, hits: new Set(), strike: 0, combo };
-      } else if (type === "heavy") {
-        this.attack = { type: "heavy", t: 0, dur: 0.58 / aspd, hits: new Set(), strike: 0 };
+        combo = this.attackChain % 3;
+      }
+      let dur;
+      if (this.animator) {
+        this.animator.attackSpeed = aspd;
+        const timing = this.animator.beginAttack(type, combo);
+        dur = timing.dur;
+      } else {
+        if (type === "light") dur = (combo === 2 ? 0.34 : 0.26) / aspd;
+        else if (type === "heavy") dur = 0.58 / aspd;
+        else if (type === "air") dur = 0.3;
+        else dur = 0.35;
+      }
+      this.attack = { type, t: 0, dur, hits: new Set(), strike: 0, combo, speed: aspd };
+      if (type === "light") {
+        this.chainTimer = window.SL.Anim ? window.SL.Anim.CONFIG.comboWindow / aspd : 0.3 / aspd;
+      }
+      if (type === "heavy") {
         this.heavyCd = 0.6;
-        this.castTimer = 0.4;
-      } else if (type === "air") {
-        this.attack = { type: "air", t: 0, dur: 0.3, hits: new Set(), strike: 0 };
+        this.castTimer = Math.min(0.4, dur * 0.45);
       } else if (type === "airHeavy") {
-        this.attack = { type: "airHeavy", t: 0, dur: 0.35, hits: new Set(), strike: 0 };
         this.vy = Math.max(this.vy, 260);
       }
       this.game.audio.play("slash");
@@ -663,14 +700,20 @@
       if (!atk) return out;
       const range = (atk.type === "heavy" ? 118 : 82) * st.rangeMul;
       const dmgMulBase = atk.type === "heavy" ? 2.6 : (atk.combo === 2 ? 1.3 : atk.combo === 1 ? 1.1 : 1.0);
+      // derive active damage window from animation timing so damage lands on the visual swing
+      let start = 0.06, end = 0.2;
+      if (window.SL.Anim && this.animator) {
+        const kind = (atk.type === "heavy" || atk.type === "airHeavy") ? "heavy" : "combo";
+        const timing = window.SL.Anim.timingsFor(this.animator, atk, kind);
+        start = Math.max(0.02, timing.startup * 0.75);
+        end = Math.min(atk.dur, timing.startup + timing.active * 0.9);
+      } else {
+        if (atk.type === "heavy") { start = 0.24; end = 0.46; }
+        else if (atk.type === "air") { start = 0.06; end = 0.22; }
+        else if (atk.type === "airHeavy") { start = 0.1; end = 0.3; }
+      }
       if (atk.type === "light" || atk.type === "heavy") {
-        let activeStart = atk.type === "heavy" ? 0.24 : 0.06;
-        let activeEnd = atk.type === "heavy" ? 0.46 : 0.2;
-        // normalize by dur
-        const frac = atk.dur;
-        activeStart *= frac / (atk.type === "heavy" ? 0.58 : 0.26);
-        activeEnd *= frac / (atk.type === "heavy" ? 0.58 : 0.26);
-        if (atk.t >= activeStart && atk.t <= activeEnd) {
+        if (atk.t >= start && atk.t <= end) {
           if (st.whirlwind && atk.type === "heavy") {
             out.push({ x: this.x, y: this.y - 34, radius: range * 0.9, arc: U.TAU, dmgMul: dmgMulBase, knock: 260, type: atk.type, angle: 0, pierce: 999 });
           } else {
@@ -680,10 +723,7 @@
           }
         }
       } else if (atk.type === "air" || atk.type === "airHeavy") {
-        const frac = atk.dur;
-        const s = (atk.type === "airHeavy" ? 0.1 : 0.06) * (0.3 / frac) * 0.3 / 0.3;
-        const e = (atk.type === "airHeavy" ? 0.3 : 0.22) * (0.3 / frac);
-        if (atk.t >= s && atk.t <= e) {
+        if (atk.t >= start && atk.t <= end) {
           out.push({
             x: this.x, y: this.y - 20, radius: range * 0.8, arc: Math.PI * 0.8,
             angle: Math.PI / 2, dmgMul: atk.type === "airHeavy" ? 2.2 : 1.2,
@@ -842,6 +882,11 @@
       }
       this.hp -= dmg;
       this.hurtFlash = 0.25;
+      this.hurtT = 0.28;
+      this.hurtDur = 0.28;
+      this.hurtDir = opts.source ? (opts.source.x > this.x ? -1 : 1) : (opts.knockDir || -1);
+      if (this.animator) this.animator.impact("hit", {});
+      g.screenShake(2.5, 0.14);
       g.audio.play("hurt");
       g.particles.burst(this.x, this.y - 30, "#ff5252", 8, 150, 3, 0.4, 200);
       if (this.hp <= 0) {
@@ -874,6 +919,8 @@
 
     pose() {
       if (this.dead) return "dead";
+      if (this.victoryT > 0) return "victory";
+      if (this.hurtT > 0) return "hurt";
       if (this.dashTimer > 0) return "dash";
       if (this.attack) {
         if (this.attack.type === "heavy") return "heavy";
@@ -916,16 +963,26 @@
 
       const weapon = this._weaponConfig();
       const outfit = { helmet: this.warrior.id === "guardian" ? true : false, cloak: this.warrior.id === "berserker" ? "#7a2c14" : (this.warrior.id === "assassin" ? "#3b1660" : null) };
-      const pose = this.pose();
-      const pt = this.attack ? Math.min(1, this.attack.t / this.attack.dur) : 0;
-      const runSpeed = this.dashTimer > 0 ? 1.4 : Math.min(1, Math.abs(this.vx) / (this.baseSpeed * this.stats.speedMul));
-      drawStickman(ctx, {
-        x: this.x, y: this.y, scale: 1, facing: this.facing, t: time,
-        speed: runSpeed, pose, poseT: pt, color: this.warrior.color,
-        weapon, shield: this.warrior.id === "guardian",
-        outfit, glow: this.hurtFlash > 0 ? "#ff5252" : null,
-        alpha: this.hurtFlash > 0 && Math.floor(time * 20) % 2 === 0 ? 0.5 : 1,
-      });
+      if (this.animator) {
+        this.animator.draw(ctx, {
+          x: this.x, y: this.y, scale: 1, facing: this.facing, t: time,
+          color: this.warrior.color, weapon, shield: this.warrior.id === "guardian",
+          helmet: outfit.helmet, cloak: outfit.cloak,
+          glow: this.hurtFlash > 0 ? "#ff5252" : null,
+          alpha: this.hurtFlash > 0 && Math.floor(time * 20) % 2 === 0 ? 0.5 : 1,
+        });
+      } else {
+        const pose = this.pose();
+        const pt = this.attack ? Math.min(1, this.attack.t / this.attack.dur) : 0;
+        const runSpeed = this.dashTimer > 0 ? 1.4 : Math.min(1, Math.abs(this.vx) / (this.baseSpeed * this.stats.speedMul));
+        drawStickman(ctx, {
+          x: this.x, y: this.y, scale: 1, facing: this.facing, t: time,
+          speed: runSpeed, pose, poseT: pt, color: this.warrior.color,
+          weapon, shield: this.warrior.id === "guardian",
+          outfit, glow: this.hurtFlash > 0 ? "#ff5252" : null,
+          alpha: this.hurtFlash > 0 && Math.floor(time * 20) % 2 === 0 ? 0.5 : 1,
+        });
+      }
       ctx.globalAlpha = 1;
 
       // hp bar above player (small)

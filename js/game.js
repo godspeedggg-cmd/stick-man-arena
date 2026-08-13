@@ -82,6 +82,7 @@
       this.flashT = 0;
       this.flashColor = "#ffffff";
       this.deathTimer = 0;
+      this.hitstop = 0;
 
       this.last = 0;
       this.elapsed = 0;
@@ -353,6 +354,12 @@
     update(dt) {
       const p = this.player;
       if (!p) return;
+      if (this.hitstop > 0) {
+        this.hitstop -= dt;
+        SL.Particles.update(dt * 0.4);
+        this._updateShake(dt);
+        return;
+      }
       this.timeSurvived += dt;
 
       /* world scroll — only moves while the player walks, both directions.
@@ -424,6 +431,25 @@
               knock: { x: p.facing * hb.knock, y: (hb.type === "air" || hb.type === "airHeavy") ? 220 : -50 },
             });
             this.puff(e.x, e.y - 30, "#ffe1ea", 4);
+            // impact feedback: hitstop, shake, sparks, weapon recoil
+            const heavyHit = hb.type === "heavy" || hb.type === "airHeavy";
+            const isBoss = e.isBoss || (e.hpMax && e.hpMax > 3000);
+            const cam = window.SL.Anim ? window.SL.Anim.CONFIG.camera : null;
+            if (cam) {
+              const shakeCfg = isBoss ? cam.boss : (heavyHit ? cam.heavy : cam.light);
+              this.screenShake(shakeCfg.mag, shakeCfg.dur);
+            }
+            const hsCfg = window.SL.Anim ? window.SL.Anim.CONFIG.hitstop : null;
+            if (hsCfg) {
+              this.hitstop = Math.min(hsCfg.max, isBoss ? hsCfg.boss : (heavyHit ? hsCfg.heavy : hsCfg.light));
+            }
+            if (p.animator) {
+              p.animator.impact("hit", { heavy: heavyHit });
+            }
+            if (heavyHit) {
+              SL.Particles.burst(e.x, e.y - 30, "#ffd27a", 10, 220, 3, 0.4, 300);
+              SL.Particles.shock(e.x, e.y - 30, "#ffd27a", heavyHit ? 18 : 10);
+            }
             hitCount++;
             if (hitCount >= pierce) break;
           }
@@ -1126,6 +1152,12 @@
       SL.Audio.play("bossDefeat");
       SL.UI.toast("BOSS DEFEATED! +" + U.formatNum(bonus), "boss");
       this.screenShake(12, 0.6);
+      if (this.player) {
+        this.player.victoryT = 1.6;
+        this.player.attack = null;
+        this.player.airAtk = false;
+        if (this.player.animator) this.player.animator.beginVictory();
+      }
       SL.Particles.shock(b.x, b.y - 60, "#ffd75e", 80);
       SL.Particles.burst(b.x, b.y - 60, "#ffd75e", 30, 400, 5, 0.8, 500);
       // rewards
@@ -1664,7 +1696,7 @@
         SL.Entities.drawStickman(ctx, {
           x: ai.x, y: ai.y, scale: 1, facing: ai.facing, t: this.elapsed,
           speed: 1, pose: "dash", poseT: 0, color: ai.color,
-          weapon: { kind: "sword", color: ai.color },
+          weapon: this.player ? this.player._weaponConfig() : { kind: "sword", color: ai.color },
         });
         ctx.globalAlpha = 1;
       }
