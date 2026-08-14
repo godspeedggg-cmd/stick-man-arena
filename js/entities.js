@@ -434,7 +434,7 @@
       this.shieldHp = 0;
       this.baseSpeed = base.speed;
       this.w = 20; this.h = 58;
-      this.scale = 1.35; // visual size multiplier (draw-only; hitbox/combat unchanged)
+      this.scale = 2; // visual size multiplier (draw-only; hitbox/combat unchanged)
       this.x = 0; this.y = 0;
       this.vx = 0; this.vy = 0;
       this.facing = 1;
