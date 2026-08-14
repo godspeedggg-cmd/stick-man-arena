@@ -904,7 +904,7 @@ window.SL.Anim = (function (SL) {
       const dx = x1 - x0, dy = y1 - y0;
       const d = Math.sqrt(dx * dx + dy * dy) || 1;
       const px = -dy / d, py = dx / d;
-      const bend = (back ? -1 : 1) * w * 0.45;
+      const bend = w * 0.45;
       const ex = mx + px * bend, ey = my + py * bend;
 
       ctx.strokeStyle = P.body;
