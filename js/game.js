@@ -526,6 +526,24 @@
             }
           }
         }
+        if (!hitAny) {
+          const brs = this.worldGen.breakablesInRange(pr.x - 30, pr.x + 30);
+          for (const br of brs) {
+            if (br.broken || br.effect === "none") continue;
+            const cx = br.x + br.w / 2, cy = br.y - br.h / 2;
+            if (U.dist(pr.x, pr.y, cx, cy) < 30 + br.w) {
+              br.hp -= pr.dmg;
+              this.puff(pr.x, pr.y, "#c9d4ff", 4);
+              if (br.hp <= 0) {
+                const seg = this.worldGen.segments[br.segIdx];
+                if (seg) this._breakWorldObject(seg, br);
+              }
+              this.projectiles.splice(i, 1);
+              hitAny = true;
+              break;
+            }
+          }
+        }
         if (hitAny && !(pr.pierce && pr.pierce > 0)) {
           if (pr.type === "fire") this.puff(pr.x, pr.y, "#ff7b2e", 8);
           else this.puff(pr.x, pr.y, pr.color, 5);
@@ -721,15 +739,30 @@
           }
         }
 
-        /* locked gates open once their guards are dead */
+        /* locked gates open once their guards are dead or a blocking wall is smashed */
         if (seg.gate && !seg.gate.bossGate && seg.gate.locked && !seg.gate.open) {
-          const cleared = !(seg.spawned && seg.spawned.some((id) =>
+          const guardsDead = !(seg.spawned && seg.spawned.some((id) =>
             this.enemies.some((e) => e.id === id && !e.dead)));
-          if (cleared) {
+          const wallsSmashed = !seg.breakables.some((b) => b.openGate && !b.broken);
+          if (guardsDead || wallsSmashed) {
             seg.gate.open = true;
             this.toast("The gate grinds open!", "zone");
             SL.Audio.play("bossWarn");
           }
+        }
+
+        /* collapsing bridge cascade after its support is destroyed */
+        if (seg.bridge && seg.bridge.collapsed && !seg.bridge.done) {
+          seg.bridge.collapseT = (seg.bridge.collapseT || 0) + dt;
+          for (const p of seg.platforms) {
+            if (p.kind !== "bridge" || p.collapsed) continue;
+            if (seg.bridge.collapseT > (p._colDelay || 0)) {
+              p.collapsed = true;
+              this.screenShake(2, 0.12);
+              SL.Particles.burst(p.x + p.w / 2, p.y, "#8a8f9c", 8, 150, 3, 0.4, 0);
+            }
+          }
+          if (seg.bridge.collapseT > 0.9) seg.bridge.done = true;
         }
 
         /* rockfall feature */
@@ -768,13 +801,27 @@
         /* explosive barrels */
         for (const b of seg.barrels) {
           if (b.broken) continue;
-          if (this._barrelHit(b)) {
+          if (this._meleeHitsWorld(b)) {
             b.broken = true;
             this.damageArea(b.x, b.y - 20, 95, 0.85, 240, {});
             SL.Particles.burst(b.x, b.y - 20, "#ff7b2e", 16, 260, 4, 0.5, 0);
             SL.Particles.smoke(b.x, b.y - 20, "#444", 8);
             this.screenShake(4, 0.3);
             SL.Audio.play("explosion");
+          }
+        }
+
+        /* breakable world objects: crates, walls, bridge supports, towers */
+        for (const br of seg.breakables) {
+          if (br.broken || br.effect === "none") continue;
+          br._cd = (br._cd || 0) - dt;
+          if (br._cd > 0) continue;
+          if (this._meleeHitsWorld(br)) {
+            br._cd = 0.16;
+            br.hp -= this._meleeDmg(1);
+            SL.Particles.burst(br.x + br.w / 2, br.y - br.h * 0.6, "#aeb4c2", 4, 120, 2, 0.3, 0);
+            SL.Audio.play("hit");
+            if (br.hp <= 0) this._breakWorldObject(seg, br);
           }
         }
       }
@@ -800,15 +847,76 @@
       return best;
     }
 
-    _barrelHit(b) {
+    _meleeHitsWorld(obj) {
       const p = this.player;
       if (!p || p.dead || !p.attack) return false;
       const hbs = p.activeHitboxes();
+      const cx = obj.x + obj.w / 2, cy = obj.y - obj.h / 2;
       for (const hb of hbs) {
-        const d = U.dist(hb.x, hb.y, b.x, b.y - 20);
-        if (d < hb.radius + b.w) return true;
+        const d = U.dist(hb.x, hb.y, cx, cy);
+        if (d < hb.radius + Math.max(obj.w, obj.h) * 0.5) return true;
       }
       return false;
+    }
+
+    _breakWorldObject(seg, obj) {
+      if (obj.broken) return;
+      obj.broken = true;
+      const cx = obj.x + obj.w / 2, cy = obj.y - obj.h / 2;
+      if (obj.effect === "crate") {
+        SL.Particles.burst(cx, cy, "#b06b3a", 8, 160, 3, 0.4, 0);
+        SL.Particles.smoke(cx, cy, "#666", 4);
+        SL.Audio.play("rock");
+        if (obj.drop) this._dropRewards(obj.drop, cx);
+      } else if (obj.effect === "wall") {
+        SL.Particles.burst(cx, cy, "#8a90a0", 14, 220, 3.5, 0.5, 0);
+        this.screenShake(4, 0.25);
+        SL.Audio.play("rock");
+        if (obj.drop) this._dropRewards(obj.drop, cx);
+      } else if (obj.effect === "support") {
+        SL.Particles.burst(cx, cy, "#7a7f8c", 16, 240, 4, 0.5, 0);
+        this.screenShake(5, 0.35);
+        SL.Audio.play("rock");
+        if (obj.drop) this._dropRewards(obj.drop, cx);
+        if (seg.bridge && !seg.bridge.collapsed) this._collapseBridge(seg);
+      } else if (obj.effect === "tower") {
+        SL.Particles.burst(cx, cy, "#8a90a0", 18, 260, 4, 0.6, 0);
+        this.screenShake(6, 0.4);
+        SL.Audio.play("rock");
+        for (const e of this.enemies) {
+          if (e.dead) continue;
+          if (U.dist(cx, cy, e.x, e.y - 30) < 130 + e.w) {
+            this.dealDamage(e, this._meleeDmg(1.5), { fromPlayer: true, effects: true });
+            e.kbVx = (e.x > cx ? 1 : -1) * 320;
+            e.kbVy = -240;
+          }
+        }
+        SL.Particles.shock(cx, cy - obj.h, "#9aa2b0", 14);
+      }
+    }
+
+    _collapseBridge(seg) {
+      const b = seg.bridge;
+      if (!b || b.collapsed) return;
+      b.collapsed = true;
+      const supX = b.supports.length ? b.supports[0].x : seg.x1 - 200;
+      for (const p of seg.platforms) {
+        if (p.kind !== "bridge") continue;
+        p.collapse = true;
+        p._colDelay = Math.min(0.55, Math.abs(p.x + p.w / 2 - supX) / 700 * 0.55);
+      }
+      if (!b.routeRevealed) {
+        b.routeRevealed = true;
+        const s = b.secret;
+        const sp = { x: s.x, y: s.y, w: s.w, h: 16, kind: "stone", move: null, collapse: false, osc: 0, secret: true };
+        seg.platforms.push(sp);
+        seg.secret = { platformX: s.x, platformY: s.y, revealed: true };
+        seg.decos.push({ type: "chest", x: s.x + 12, y: s.y, w: 34, h: 26, zone: seg.zoneId });
+        this._dropRewards({ coins: 8, gems: 2, xp: 8 }, s.x + s.w / 2);
+        this.screenShake(6, 0.4);
+        this.banner("The bridge collapses! A hidden route opens!", "boss");
+        SL.Audio.play("explosion");
+      }
     }
 
     _offerPathChoice(seg) {
@@ -1434,10 +1542,10 @@
           }
           case "chest": {
             ctx.fillStyle = "#7a5a24";
-            ctx.fillRect(d.x, gy - d.h, d.w, d.h);
+            ctx.fillRect(d.x, d.y - d.h, d.w, d.h);
             ctx.fillStyle = "#e0b84a";
-            ctx.fillRect(d.x, gy - d.h, d.w, d.h * 0.4);
-            ctx.fillRect(d.x + d.w / 2 - 2, gy - d.h, 4, d.h);
+            ctx.fillRect(d.x, d.y - d.h, d.w, d.h * 0.4);
+            ctx.fillRect(d.x + d.w / 2 - 2, d.y - d.h, 4, d.h);
             break;
           }
         }
@@ -1505,6 +1613,74 @@
         if (Math.floor(time * 6) % 2 === 0) {
           ctx.fillStyle = "rgba(255,120,40,0.25)";
           ctx.beginPath(); ctx.arc(b.x + b.w / 2, gy - b.h / 2, 12, 0, U.TAU); ctx.fill();
+        }
+      }
+    }
+
+    _drawBreakables(ctx, time) {
+      const x0 = this.scrollX - 60, x1 = this.scrollX + this.viewW + 60;
+      const objs = this.worldGen.breakablesInRange(x0, x1);
+      const gy = this.groundY;
+      for (const o of objs) {
+        if (o.broken || o.effect === "none") continue;
+        const cy = gy - o.h;
+        const dmgT = 1 - o.hp / o.maxHp;
+        switch (o.type) {
+          case "crate": {
+            ctx.fillStyle = "#6b4226";
+            ctx.fillRect(o.x, cy, o.w, o.h);
+            ctx.fillStyle = "#8a5a33";
+            ctx.fillRect(o.x, cy, o.w, o.h * 0.3);
+            ctx.fillStyle = "#3a2414";
+            ctx.fillRect(o.x + 2, cy + 2, o.w - 4, 2);
+            ctx.fillRect(o.x + 2, cy + o.h - 4, o.w - 4, 2);
+            ctx.fillRect(o.x + 2, cy + 2, 2, o.h - 4);
+            ctx.fillRect(o.x + o.w - 4, cy + 2, 2, o.h - 4);
+            break;
+          }
+          case "wall": {
+            ctx.fillStyle = dmgT > 0.5 ? "#5d6372" : "#3d4250";
+            ctx.fillRect(o.x, cy, o.w, o.h);
+            ctx.fillStyle = "#575d6e";
+            ctx.fillRect(o.x, cy, o.w, 6);
+            if (dmgT > 0.3) {
+              ctx.fillStyle = "#2a2e38";
+              ctx.fillRect(o.x + 3, cy + o.h * 0.35, 4, 10);
+              ctx.fillRect(o.x + o.w - 6, cy + o.h * 0.6, 4, 10);
+            }
+            break;
+          }
+          case "support": {
+            ctx.fillStyle = "#4a4f5c";
+            ctx.fillRect(o.x, cy, o.w, o.h);
+            ctx.fillStyle = "#8a90a0";
+            ctx.fillRect(o.x, cy, o.w, 4);
+            ctx.fillRect(o.x, cy + o.h - 10, o.w, 10);
+            if (dmgT > 0.3) {
+              ctx.fillStyle = "#262a33";
+              ctx.beginPath();
+              ctx.moveTo(o.x + o.w / 2, cy + 4);
+              ctx.lineTo(o.x + o.w * 0.3, cy + o.h * 0.4);
+              ctx.lineTo(o.x + o.w * 0.7, cy + o.h * 0.7);
+              ctx.lineTo(o.x + o.w / 2, cy + o.h - 4);
+              ctx.fill();
+            }
+            break;
+          }
+          case "tower": {
+            ctx.fillStyle = dmgT > 0.5 ? "#545a68" : "#6a7080";
+            ctx.fillRect(o.x, cy, o.w, o.h);
+            ctx.fillStyle = "#8a90a0";
+            ctx.fillRect(o.x - 4, cy, o.w + 8, 5);
+            ctx.fillRect(o.x - 4, cy + o.h - 12, o.w + 8, 12);
+            break;
+          }
+        }
+        if (dmgT > 0.05) {
+          ctx.fillStyle = "rgba(0,0,0,0.55)";
+          ctx.fillRect(o.x, cy - 8, o.w, 4);
+          ctx.fillStyle = "#ffd75e";
+          ctx.fillRect(o.x, cy - 8, o.w * (1 - dmgT), 4);
         }
       }
     }
@@ -1599,10 +1775,11 @@
         if (p.collapsed) continue;
         this._drawPlatform(ctx, p, this.elapsed);
       }
-      // worldgen decos / hazards / barrels
+      // worldgen decos / hazards / barrels / breakables
       this._drawWorldDecos(ctx, this.elapsed);
       this._drawBarrels(ctx, this.elapsed);
       this._drawWorldHazards(ctx, this.elapsed);
+      this._drawBreakables(ctx, this.elapsed);
 
       // ground telegraphs
       for (const gt of this.groundTelegraphs) {

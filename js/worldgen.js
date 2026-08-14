@@ -176,7 +176,7 @@
       const seg = {
         idx, x0, x1: x0 + SEG_LEN, zoneId, type,
         name: ROOMS[type].name, rng, dist,
-        platforms: [], hazards: [], decos: [], barrels: [],
+        platforms: [], hazards: [], decos: [], barrels: [], breakables: [],
         encounter: null, rewards: null, feature: null, event: null,
         secret: null, junction: null, gate: null,
       };
@@ -276,6 +276,26 @@
     _barrel(seg, x) {
       seg.barrels.push({ type: "barrel", x, y: this.game.groundY, w: 26, h: 30, broken: false });
     }
+    /* breakable world objects (walls, crates, bridge supports, towers).
+       hp is tuned against ~_meleeDmg(1) (~60 dmg per melee swing). */
+    _breakable(seg, zone, x, type, extra) {
+      const gy = this.game.groundY;
+      const defs = {
+        crate:   { w: 26, h: 26, hp: 60, effect: "crate" },
+        wall:    { w: 22, h: 150, hp: 180, effect: "wall" },
+        support: { w: 20, h: 70, hp: 120, effect: "support" },
+        tower:   { w: 26, h: 120, hp: 180, effect: "tower" },
+      };
+      const def = defs[type];
+      const o = Object.assign({
+        type, x, y: gy, w: def.w, h: def.h,
+        hp: def.hp, maxHp: def.hp,
+        broken: false, zone: zone.id, effect: def.effect,
+        segIdx: seg.idx,
+      }, extra || {});
+      seg.breakables.push(o);
+      return o;
+    }
 
     /* ---------- room generators ---------- */
     _genOpen(seg, zone, gy, rng, dist) {
@@ -300,6 +320,11 @@
       for (let i = 0; i < 2; i++) {
         this._barrel(seg, seg.x0 + 160 + rng() * (SEG_LEN - 320));
       }
+      // crates you can smash open for a small stash
+      if (rng() < 0.7) {
+        this._breakable(seg, zone, seg.x0 + 90 + rng() * (SEG_LEN - 180), "crate",
+          { drop: { coins: 2 + Math.floor(rng() * 3), gems: rng() < 0.4 ? 1 : 0, xp: 2 } });
+      }
       seg.encounter = { template: "patrol", types: ["grunt", "grunt"], count: 2, elite: false };
       if (dist > 800 && rng() < 0.4) seg.encounter.types.push(rng() < 0.5 ? "archer" : "assassin");
     }
@@ -321,6 +346,15 @@
       }
       seg.encounter = { template: "patrol", types: ["grunt", "shield"], count: 2, elite: false };
       seg.gate = { x: seg.x1 - 60, locked: true, open: false };
+      // some corridors block the exit with a destructible wall instead of a guard gate
+      if (rng() < 0.55) {
+        const wx = seg.x1 - 100;
+        seg.decos.push({ type: "wall", x: wx, y: gy, w: 18, h: 150, zone: zone.id });
+        this._breakable(seg, zone, wx, "wall", {
+          openGate: true, drop: { coins: 3, gems: rng() < 0.3 ? 1 : 0, xp: 2 },
+        });
+        seg.encounter = { template: "patrol", types: ["grunt", "grunt"], count: 2, elite: false };
+      }
     }
 
     _genVertical(seg, zone, gy, rng, dist) {
@@ -367,6 +401,13 @@
         seg.encounter.types.push("tank");
         seg.encounter.count = 4;
       }
+      // bridge support pillar: destroy it to collapse the span and reveal a hidden route
+      seg.bridge = { supports: [], collapsed: false, collapseT: 0, done: false, routeRevealed: false };
+      const supX = seg.x1 - 200;
+      seg.bridge.supports.push(this._breakable(seg, zone, supX, "support",
+        { drop: { coins: 4, gems: 1, xp: 4 } }));
+      // hidden stash on a shelf near the far exit, materialized only after the collapse
+      seg.bridge.secret = { x: seg.x1 - 190, y: gy - 120, w: 130 };
     }
 
     _genTunnel(seg, zone, gy, rng, dist) {
@@ -408,6 +449,14 @@
       }
       // barrels among the rubble
       for (let i = 0; i < 2; i++) this._barrel(seg, seg.x0 + 120 + rng() * (SEG_LEN - 240));
+      // a tower you can knock down onto nearby enemies + a crate
+      if (rng() < 0.7) {
+        const tx = seg.x0 + 120 + rng() * (SEG_LEN - 240);
+        this._breakable(seg, zone, tx, "tower");
+        seg.decos.push({ type: "pillar", x: tx, y: gy, w: 26, h: 120, broken: false, zone: zone.id });
+      }
+      this._breakable(seg, zone, seg.x0 + 200 + rng() * (SEG_LEN - 400), "crate",
+        { drop: { coins: 3, gems: rng() < 0.4 ? 1 : 0, xp: 2 } });
       seg.encounter = { template: "hunt", types: ["archer", "assassin", "grunt", "grunt"], count: 4, elite: false };
     }
 
@@ -438,6 +487,10 @@
       for (let i = 0; i < 2; i++) {
         const x = seg.x0 + 120 + i * 360 + rng() * 100;
         this._plat(seg, x, gy - 56 - rng() * 30, 100 + rng() * 60, { kind: "wood" });
+      }
+      if (rng() < 0.6) {
+        this._breakable(seg, zone, seg.x0 + 100 + rng() * (SEG_LEN - 200), "crate",
+          { drop: { coins: 2 + Math.floor(rng() * 2), gems: rng() < 0.3 ? 1 : 0, xp: 2 } });
       }
       seg.encounter = { template: "hunt", types: ["grunt", "archer", "grunt"], count: 3, elite: false };
     }
@@ -599,6 +652,16 @@
       const out = [];
       for (const seg of this.segmentsInRange(x0, x1)) {
         for (const b of seg.barrels) {
+          if (b.x + b.w >= x0 && b.x <= x1) out.push(b);
+        }
+      }
+      return out;
+    }
+    breakablesInRange(x0, x1) {
+      const out = [];
+      for (const seg of this.segmentsInRange(x0, x1)) {
+        for (const b of seg.breakables) {
+          if (b.hidden) continue;
           if (b.x + b.w >= x0 && b.x <= x1) out.push(b);
         }
       }
