@@ -859,8 +859,8 @@ window.SL.Anim = (function (SL) {
       this._chest(ctx, J, lw, h, P);
 
       /* ---- arms (back then front) ---- */
-      this._arm(ctx, J.shX, J.shY, J.hbX, J.hbY, lw * 0.8, P, true);
-      this._arm(ctx, J.shX, J.shY, J.hfX, J.hfY, lw, P, false);
+      this._arm(ctx, J.shX, J.shY, J.hbX, J.hbY, lw * 0.8, P);
+      this._arm(ctx, J.shX, J.shY, J.hfX, J.hfY, lw, P);
 
       /* ---- shoulder armor ---- */
       this._shoulder(ctx, J, lw, h, P);
@@ -898,14 +898,18 @@ window.SL.Anim = (function (SL) {
       ctx.restore();
     }
 
-    /* thin black arm with slight elbow bend, shoulder accent, wrist band + hand */
-    _arm(ctx, x0, y0, x1, y1, w, P, back) {
+    /* thin black arm with slight elbow bend (straight during walk/run, matching the original animation) */
+    _arm(ctx, x0, y0, x1, y1, w, P) {
       const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
       const dx = x1 - x0, dy = y1 - y0;
       const d = Math.sqrt(dx * dx + dy * dy) || 1;
       const px = -dy / d, py = dx / d;
-      const bend = w * 0.45;
-      const ex = mx + px * bend, ey = my + py * bend;
+      const straight = this.state === "walk" || this.state === "run";
+      let ex = mx, ey = my;
+      if (!straight) {
+        const bend = w * 0.45;
+        ex = mx + px * bend; ey = my + py * bend;
+      }
 
       ctx.strokeStyle = P.body;
       ctx.lineWidth = w * 1.15;
