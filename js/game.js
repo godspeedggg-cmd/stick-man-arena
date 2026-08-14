@@ -1694,7 +1694,7 @@
       for (const ai of this.afterimages) {
         ctx.globalAlpha = (ai.t / 0.3) * 0.4;
         SL.Entities.drawStickman(ctx, {
-          x: ai.x, y: ai.y, scale: 1, facing: ai.facing, t: this.elapsed,
+          x: ai.x, y: ai.y, scale: this.player ? (this.player.scale || 1) : 1, facing: ai.facing, t: this.elapsed,
           speed: 1, pose: "dash", poseT: 0, color: ai.color,
           weapon: this.player ? this.player._weaponConfig() : { kind: "sword", color: ai.color },
         });
@@ -1717,7 +1717,7 @@
         for (const c of this.clones) {
           ctx.globalAlpha = 0.6;
           SL.Entities.drawStickman(ctx, {
-            x: c.x, y: c.y, scale: 0.85, facing: this.player.facing, t: this.elapsed,
+            x: c.x, y: c.y, scale: (this.player.scale || 1) * 0.85, facing: this.player.facing, t: this.elapsed,
             speed: 0.5, pose: this.player.pose(), poseT: 0, color: "#7a5ac9",
             weapon: { kind: "sword", color: "#b080ff" },
           });

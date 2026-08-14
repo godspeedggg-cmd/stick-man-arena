@@ -434,6 +434,7 @@
       this.shieldHp = 0;
       this.baseSpeed = base.speed;
       this.w = 20; this.h = 58;
+      this.scale = 1.35; // visual size multiplier (draw-only; hitbox/combat unchanged)
       this.x = 0; this.y = 0;
       this.vx = 0; this.vy = 0;
       this.facing = 1;
@@ -939,25 +940,26 @@
         ctx.globalAlpha = 0.5;
       }
       // aura
+      const bs = this.scale || 1;
       if (this.buffs.warcry > 0 || (this.stats.berserk && this.hp < this.maxHp * 0.4)) {
         ctx.globalAlpha = 0.35;
         ctx.fillStyle = "#ff6b4a";
-        ctx.beginPath(); ctx.arc(this.x, this.y - 32, 34 + Math.sin(time * 8) * 5, 0, U.TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(this.x, this.y - 32 * bs, (34 + Math.sin(time * 8) * 5) * bs, 0, U.TAU); ctx.fill();
         ctx.globalAlpha = 1;
       }
       if (this.buffs.bulwark > 0) {
         ctx.globalAlpha = 0.3;
         ctx.fillStyle = "#3fe0b0";
-        ctx.beginPath(); ctx.arc(this.x, this.y - 32, 40, 0, U.TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(this.x, this.y - 32 * bs, 40 * bs, 0, U.TAU); ctx.fill();
         ctx.globalAlpha = 1;
       }
       if (this.buffs.voidStorm > 0) {
         const n = 8;
         for (let i = 0; i < n; i++) {
           const a = time * 3 + (i / n) * U.TAU;
-          const r = 46 + Math.sin(time * 6 + i) * 6;
+          const r = (46 + Math.sin(time * 6 + i) * 6) * bs;
           ctx.fillStyle = "#a06bff";
-          ctx.beginPath(); ctx.arc(this.x + Math.cos(a) * r, this.y - 32 + Math.sin(a) * r * 0.4, 4, 0, U.TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(this.x + Math.cos(a) * r, this.y - 32 * bs + Math.sin(a) * r * 0.4, 4, 0, U.TAU); ctx.fill();
         }
       }
 
@@ -965,7 +967,7 @@
       const outfit = { helmet: this.warrior.id === "guardian" ? true : false, cloak: this.warrior.id === "berserker" ? "#7a2c14" : (this.warrior.id === "assassin" ? "#3b1660" : null) };
       if (this.animator) {
         this.animator.draw(ctx, {
-          x: this.x, y: this.y, scale: 1, facing: this.facing, t: time,
+          x: this.x, y: this.y, scale: bs, facing: this.facing, t: time,
           color: this.warrior.color, weapon, shield: this.warrior.id === "guardian",
           helmet: outfit.helmet, cloak: outfit.cloak,
           glow: this.hurtFlash > 0 ? "#ff5252" : null,
@@ -976,7 +978,7 @@
         const pt = this.attack ? Math.min(1, this.attack.t / this.attack.dur) : 0;
         const runSpeed = this.dashTimer > 0 ? 1.4 : Math.min(1, Math.abs(this.vx) / (this.baseSpeed * this.stats.speedMul));
         drawStickman(ctx, {
-          x: this.x, y: this.y, scale: 1, facing: this.facing, t: time,
+          x: this.x, y: this.y, scale: bs, facing: this.facing, t: time,
           speed: runSpeed, pose, poseT: pt, color: this.warrior.color,
           weapon, shield: this.warrior.id === "guardian",
           outfit, glow: this.hurtFlash > 0 ? "#ff5252" : null,
@@ -987,11 +989,11 @@
 
       // hp bar above player (small)
       if (this.hp < this.maxHp) {
-        const w = 34;
+        const w = 34 * bs;
         ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(this.x - w / 2, this.y - 74, w, 4);
+        ctx.fillRect(this.x - w / 2, this.y - 74 * bs, w, 4);
         ctx.fillStyle = "#ff5252";
-        ctx.fillRect(this.x - w / 2, this.y - 74, w * Math.max(0, this.hp / this.maxHp), 4);
+        ctx.fillRect(this.x - w / 2, this.y - 74 * bs, w * Math.max(0, this.hp / this.maxHp), 4);
       }
     }
 
