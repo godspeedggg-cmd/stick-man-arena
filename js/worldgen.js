@@ -77,6 +77,10 @@
       name: "Hidden Sanctum", weight: 4,
       desc: "Concealed riches.",
     },
+    machine: {
+      name: "Ancient Machine", weight: 6,
+      desc: "Power an old device to open the vault.",
+    },
     boss: {
       name: "Boss Arena", weight: 0,
       desc: "The zone's lord awaits.",
@@ -201,6 +205,7 @@
         case "treasure": this._genTreasure(seg, zone, gy, rng, dist); break;
         case "elite": this._genElite(seg, zone, gy, rng, dist); break;
         case "secret": this._genSecret(seg, zone, gy, rng, dist); break;
+        case "machine": this._genMachine(seg, zone, gy, rng, dist); break;
         case "boss": this._genBoss(seg, zone, gy, rng, dist); break;
       }
 
@@ -269,6 +274,7 @@
         cactus: { type, x, y: gy, w: 22, h: 40, hazard: true, dmg: 9, zone: zone.id },
         icecrystal: { type, x, y: gy, w: 18, h: 26, hazard: true, dmg: 11, zone: zone.id },
         rootspike: { type, x, y: gy, w: 26, h: 18, hazard: true, dmg: 10, zone: zone.id },
+        water: { type, x, y: gy, w: 130, h: 18, hazard: false, zone: zone.id, water: true },
       }[type];
       if (!base) return;
       seg.hazards.push(Object.assign(base, extra || {}));
@@ -285,6 +291,7 @@
         wall:    { w: 22, h: 150, hp: 180, effect: "wall" },
         support: { w: 20, h: 70, hp: 120, effect: "support" },
         tower:   { w: 26, h: 120, hp: 180, effect: "tower" },
+        machine: { w: 40, h: 62, hp: 400, effect: "machine" },
       };
       const def = defs[type];
       const o = Object.assign({
@@ -319,6 +326,10 @@
       // a couple explosive barrels scattered around
       for (let i = 0; i < 2; i++) {
         this._barrel(seg, seg.x0 + 160 + rng() * (SEG_LEN - 320));
+      }
+      // a water pool that an ice build can freeze into a bridge
+      if (rng() < 0.4) {
+        this._haz(seg, zone, "water", seg.x0 + 130 + rng() * (SEG_LEN - 260));
       }
       // crates you can smash open for a small stash
       if (rng() < 0.7) {
@@ -488,6 +499,10 @@
         const x = seg.x0 + 120 + i * 360 + rng() * 100;
         this._plat(seg, x, gy - 56 - rng() * 30, 100 + rng() * 60, { kind: "wood" });
       }
+      // forest ponds — freeze them with an ice build for safe footing
+      if (rng() < 0.5) {
+        this._haz(seg, zone, "water", seg.x0 + 140 + rng() * (SEG_LEN - 280));
+      }
       if (rng() < 0.6) {
         this._breakable(seg, zone, seg.x0 + 100 + rng() * (SEG_LEN - 200), "crate",
           { drop: { coins: 2 + Math.floor(rng() * 2), gems: rng() < 0.3 ? 1 : 0, xp: 2 } });
@@ -536,6 +551,25 @@
       seg.rewards = { coins: 10 + Math.floor(rng() * 6), gems: 2 + Math.floor(rng() * 3), xp: 10 + Math.floor(rng() * 6) };
       seg.decos.push({ type: "chest", x: seg.x0 + 150, y: gy - h, w: 34, h: 26, zone: zone.id });
       seg.encounter = null;
+    }
+
+    _genMachine(seg, zone, gy, rng, dist) {
+      // an ancient machine guards a vault. Smash it, or power it with lightning.
+      const mx = seg.x0 + SEG_LEN - 190;
+      const mach = this._breakable(seg, zone, mx, "machine", {
+        drop: { coins: 6 + Math.floor(rng() * 4), gems: 1 + Math.floor(rng() * 2), xp: 6 + Math.floor(rng() * 4) },
+      });
+      seg.machine = { x: mx + 20, y: gy - 62, charges: 0, needed: 3 };
+      seg.gate = { x: mx - 20, locked: true, open: false };
+      seg.decos.push({ type: "chest", x: seg.x0 + SEG_LEN - 90, y: gy, w: 34, h: 26, zone: zone.id });
+      seg.encounter = { template: "ironBrigade", types: ["shield", "shield", "archer"], count: 3, elite: false };
+      if (dist > 1000 && rng() < 0.4) {
+        seg.encounter.types.push("mage");
+        seg.encounter.count = 4;
+      }
+      if (rng() < 0.5) {
+        this._barrel(seg, seg.x0 + 120 + rng() * 300);
+      }
     }
 
     _genBoss(seg, zone, gy, rng, dist) {

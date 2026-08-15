@@ -60,6 +60,7 @@
       p.rot = opts.rot || 0;
       p.vrot = opts.vrot || 0;
       p.fade = opts.fade !== undefined ? opts.fade : 1;
+      p.pts = opts.pts;
       return p;
     }
 

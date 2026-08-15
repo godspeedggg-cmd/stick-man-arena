@@ -51,6 +51,8 @@
       this.dynamicHazards = [];
       this.enteredSegs = new Set();
       this.darkness = null;
+      this.ignited = [];       // burning world decos {d, t, dur, spread}
+      this.frozenPools = [];   // ice-frozen water pools acting as platforms {x, y, w, h, t, dur}
 
       // run stats
       this.distance = 0;
@@ -178,6 +180,8 @@
       this.dynamicHazards = [];
       this.enteredSegs = new Set();
       this.darkness = null;
+      this.ignited = [];
+      this.frozenPools = [];
 
       this.distance = 0;
       this.score = 0;
@@ -390,6 +394,10 @@
 
       /* worldgen segments (encounters, gates, events, features) */
       this._updateWorldSegments(dt);
+
+      /* elemental world state (fires spread, ice melts) */
+      this._updateIgnited(dt);
+      this._updateFrozen(dt);
 
       /* spawning */
       this._spawnLogic(dt);
@@ -743,7 +751,8 @@
         if (seg.gate && !seg.gate.bossGate && seg.gate.locked && !seg.gate.open) {
           const guardsDead = !(seg.spawned && seg.spawned.some((id) =>
             this.enemies.some((e) => e.id === id && !e.dead)));
-          const wallsSmashed = !seg.breakables.some((b) => b.openGate && !b.broken);
+          const hasWallGate = seg.breakables.some((b) => b.openGate);
+          const wallsSmashed = hasWallGate && !seg.breakables.some((b) => b.openGate && !b.broken);
           if (guardsDead || wallsSmashed) {
             seg.gate.open = true;
             this.toast("The gate grinds open!", "zone");
@@ -879,6 +888,15 @@
         SL.Audio.play("rock");
         if (obj.drop) this._dropRewards(obj.drop, cx);
         if (seg.bridge && !seg.bridge.collapsed) this._collapseBridge(seg);
+      } else if (obj.effect === "machine") {
+        SL.Particles.burst(cx, cy, "#5fc8ff", 18, 260, 4, 0.6, 0);
+        SL.Particles.shock(cx, cy, "#5fc8ff", 16);
+        this.screenShake(5, 0.3);
+        SL.Audio.play("lightning");
+        if (seg.machine) seg.machine.active = true;
+        if (seg.gate) { seg.gate.locked = false; seg.gate.open = true; }
+        this.banner("Ancient machine powers up! The vault opens.", "boss");
+        if (obj.drop) this._dropRewards(obj.drop, cx);
       } else if (obj.effect === "tower") {
         SL.Particles.burst(cx, cy, "#8a90a0", 18, 260, 4, 0.6, 0);
         this.screenShake(6, 0.4);
@@ -892,6 +910,90 @@
           }
         }
         SL.Particles.shock(cx, cy - obj.h, "#9aa2b0", 14);
+      }
+    }
+
+    /* ================= elemental world interaction ================= */
+    _igniteNearby(x, y, r) {
+      const segs = this.worldGen.segmentsInRange(x - r, x + r);
+      for (const seg of segs) {
+        for (const d of seg.decos) {
+          if (d.type !== "tree" && d.type !== "iceTree" && d.type !== "cactus") continue;
+          const dx = d.x + d.w / 2, dy = d.y - d.h / 2;
+          if (U.dist(x, y, dx, dy) < r + d.w) this._ignite(seg, d);
+        }
+      }
+    }
+
+    _ignite(seg, d) {
+      if (this.ignited.some((f) => f.d === d)) return;
+      const f = { d, t: 0, dur: 2.6 + Math.random() * 1.2, seg, spread: 0.7 + Math.random() * 0.4, spreadDone: false };
+      this.ignited.push(f);
+      SL.Audio.play("fire");
+      SL.Particles.burst(d.x + d.w / 2, d.y - d.h / 2, "#ff7b2e", 6, 120, 2, 0.4, 0);
+    }
+
+    _updateIgnited(dt) {
+      const r = this.run;
+      for (let i = this.ignited.length - 1; i >= 0; i--) {
+        const f = this.ignited[i];
+        const d = f.d;
+        f.t += dt;
+        const cx = d.x + d.w / 2, cy = d.y - d.h / 2;
+        // fire damages enemies it touches
+        if (f.t > 0.5) {
+          for (const e of this.enemies) {
+            if (e.dead) continue;
+            if (U.dist(cx, cy, e.x, e.y - 30) < d.w * 0.9 + e.w) {
+              this.dealDamage(e, 4 * (r.burnLevel || 1), { silent: true, dot: true });
+            }
+          }
+        }
+        // fire spreads to neighboring vegetation
+        if (!f.spreadDone && f.t > f.spread) {
+          f.spreadDone = true;
+          this._igniteNearby(cx, cy, 85);
+        }
+        if (Math.random() < dt * 18) {
+          SL.Particles.burst(cx + (Math.random() - 0.5) * d.w * 0.5, cy, "#ff8a3a", 2, 80, 2, 0.3, 0);
+        }
+        if (f.t >= f.dur) {
+          const seg = this.worldGen.segments[this.worldGen.segmentIndex(d.x)];
+          if (seg) {
+            const idx = seg.decos.indexOf(d);
+            if (idx >= 0) seg.decos.splice(idx, 1);
+          }
+          SL.Particles.burst(cx, cy - d.h * 0.2, "#444", 6, 100, 2.5, 0.4, 0);
+          SL.Particles.smoke(cx, cy - d.h * 0.4, "#333", 5);
+          this.ignited.splice(i, 1);
+        }
+      }
+    }
+
+    _freezeNearby(x, y, r) {
+      const segs = this.worldGen.segmentsInRange(x - r, x + r);
+      for (const seg of segs) {
+        for (const h of seg.hazards) {
+          if (!h.water) continue;
+          const hx = h.x + h.w / 2, hy = h.y - h.h / 2;
+          if (U.dist(x, y, hx, hy) < r + h.w) {
+            if (this.frozenPools.some((fp) => fp.water === h)) continue;
+            this.frozenPools.push({ x: h.x - 2, y: h.y - 14, w: h.w + 4, h: 14, t: 0, dur: 5, water: h });
+            SL.Particles.burst(hx, hy, "#bfe9f5", 8, 140, 2.5, 0.4, 0);
+            SL.Audio.play("shoot");
+          }
+        }
+      }
+    }
+
+    _updateFrozen(dt) {
+      for (let i = this.frozenPools.length - 1; i >= 0; i--) {
+        const fp = this.frozenPools[i];
+        fp.t += dt;
+        if (fp.t >= fp.dur) {
+          SL.Particles.burst(fp.x + fp.w / 2, fp.y + 4, "#8fd0e8", 6, 100, 2, 0.3, 0);
+          this.frozenPools.splice(i, 1);
+        }
       }
     }
 
@@ -1022,6 +1124,9 @@
         if (onHit.burn) apply.burn = onHit.burn;
         if (onHit.poison) apply.poison = onHit.poison;
         if (onHit.slow) apply.slow = onHit.slow;
+        // the world reacts to elemental builds
+        if (onHit.burn) this._igniteNearby(target.x, target.y - 30, 95);
+        if (onHit.slow) this._freezeNearby(target.x, target.y - 30, 115);
       }
       target.applyDamage(final, apply);
 
@@ -1069,6 +1174,20 @@
       SL.Particles.burst(target.x, target.y - 40, "#aedcff", 10, 200, 3, 0.4, 0);
       SL.Audio.play("lightning");
       this.screenShake(4, 0.15);
+      // lightning arcs to and powers nearby ancient machines
+      const segs = this.worldGen.segmentsInRange(target.x - 60, target.x + 60);
+      for (const seg of segs) {
+        for (const br of seg.breakables) {
+          if (br.broken || br.effect !== "machine") continue;
+          const cx = br.x + br.w / 2, cy = br.y - br.h / 2;
+          if (U.dist(target.x, target.y - 30, cx, cy) < 140 + br.w) {
+            br.hp -= 120;
+            if (seg.machine) seg.machine.charges++;
+            SL.Particles.lightning(target.x, target.y - 60, cx, cy, "#aedcff", 7);
+            if (br.hp <= 0) this._breakWorldObject(seg, br);
+          }
+        }
+      }
     }
 
     damageArea(x, y, radius, dmgMul, knock, opts) {
@@ -1433,6 +1552,10 @@
           }
         }
       }
+      // frozen water pools act as temporary ice bridges
+      for (const fp of this.frozenPools) {
+        plats.push({ x: fp.x, y: fp.y, w: fp.w, h: 16, kind: "ice", move: null, collapse: false, osc: 0, frozen: true });
+      }
       this.activePlatforms = plats;
     }
 
@@ -1498,6 +1621,11 @@
       const decos = this.worldGen.decosInRange(x0, x1);
       for (const d of decos) {
         const gy = this.groundY;
+        const burning = this.ignited.some((f) => f.d === d);
+        if (burning) {
+          this._drawFire(ctx, d, time);
+          continue;
+        }
         switch (d.type) {
           case "tree": case "iceTree": {
             ctx.fillStyle = d.type === "iceTree" ? "#cfeef7" : "#2e5a3a";
@@ -1552,6 +1680,17 @@
       }
     }
 
+    _drawFire(ctx, d, time) {
+      const cx = d.x + d.w / 2, cy = d.y - d.h * 0.45;
+      const flick = 0.6 + Math.sin(time * 12 + d.x) * 0.2;
+      ctx.fillStyle = U.rgba(255, 120, 30, 0.45 * flick);
+      ctx.fillRect(d.x + d.w * 0.3, cy - d.h * 0.12, d.w * 0.4, d.h * 0.55);
+      ctx.fillStyle = U.rgba(255, 200, 80, 0.65 * flick);
+      ctx.fillRect(d.x + d.w * 0.42, cy - d.h * 0.1, d.w * 0.16, d.h * 0.45);
+      ctx.fillStyle = "#2a1a10";
+      ctx.fillRect(d.x + d.w * 0.25, cy + d.h * 0.35, d.w * 0.5, d.h * 0.2);
+    }
+
     _drawWorldHazards(ctx, time) {
       const x0 = this.scrollX - 40, x1 = this.scrollX + this.viewW + 40;
       const hzs = this.worldGen.hazardsInRange(x0, x1);
@@ -1590,6 +1729,16 @@
               ctx.fillStyle = U.rgba(255, 220, 90, 0.7 * f);
               ctx.fillRect(hz.x - 4, gy - 70 * f, 14, 70 * f + 4);
             }
+            break;
+          }
+          case "water": {
+            const frozen = this.frozenPools.some((f) => f.water === hz);
+            if (frozen) break; // hidden under the ice bridge
+            const ripple = 0.5 + Math.sin(time * 3 + hz.x) * 0.15;
+            ctx.fillStyle = U.rgba(70, 140, 220, 0.4 + ripple * 0.15);
+            ctx.fillRect(hz.x, gy - 6, hz.w, 6);
+            ctx.fillStyle = U.rgba(110, 180, 240, 0.7);
+            ctx.fillRect(hz.x, gy - 4, hz.w, 3);
             break;
           }
         }
@@ -1673,6 +1822,27 @@
             ctx.fillStyle = "#8a90a0";
             ctx.fillRect(o.x - 4, cy, o.w + 8, 5);
             ctx.fillRect(o.x - 4, cy + o.h - 12, o.w + 8, 12);
+            break;
+          }
+          case "machine": {
+            const m = (this.worldGen.segments[o.segIdx] || {}).machine;
+            const glow = m ? (m.active ? 1 : 0.3 + Math.sin(time * 3) * 0.2) : 0.4;
+            ctx.fillStyle = "#2a2e38";
+            ctx.fillRect(o.x, cy, o.w, o.h);
+            ctx.fillStyle = "#4a4f5c";
+            ctx.fillRect(o.x - 4, cy, o.w + 8, 6);
+            ctx.fillRect(o.x - 4, cy + o.h - 10, o.w + 8, 10);
+            ctx.fillStyle = U.rgba(95, 200, 255, 0.25 + glow * 0.45);
+            ctx.fillRect(o.x + 6, cy + 8, o.w - 12, o.h - 16);
+            ctx.fillStyle = "#5fc8ff";
+            ctx.fillRect(o.x + o.w / 2 - 2, cy + o.h - 26, 4, 10);
+            if (m && !m.active) {
+              const fill = Math.min(1, m.charges / m.needed);
+              ctx.fillStyle = "rgba(0,0,0,0.55)";
+              ctx.fillRect(o.x, cy - 8, o.w, 4);
+              ctx.fillStyle = "#5fc8ff";
+              ctx.fillRect(o.x, cy - 8, o.w * fill, 4);
+            }
             break;
           }
         }
