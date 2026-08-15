@@ -123,6 +123,7 @@
       this.segments = {};     // idx -> segment
       this.recent = [];       // recently used room keys
       this.pathMod = null;    // active branching-path override
+      this.mutatedZones = {}; // zoneIdx -> mutation kind (after boss death)
     }
 
     setSeed(seed) {
@@ -131,6 +132,7 @@
       this.recent = [];
       this.pathMod = null;
       this.lastJunction = 0;
+      this.mutatedZones = {};
     }
 
     segmentIndex(x) { return Math.floor(x / SEG_LEN); }
@@ -215,8 +217,70 @@
         seg.event = null;
       }
 
+      // boss-killed regions keep their new character in every future segment
+      const zoneIdx = Math.floor((idx * SEG_LEN) / (SL.Levels.ZONE_LENGTH * 60));
+      const kind = this.mutatedZones[zoneIdx];
+      if (kind && seg.type !== "boss") this._applyZoneMutation(seg, kind);
+
       this._validate(seg, gy);
       return seg;
+    }
+
+    /* ---------- region mutation (boss kills change the world) ---------- */
+    markZone(zoneIdx, kind) {
+      this.mutatedZones[zoneIdx] = kind;
+    }
+
+    applyMutationToGenerated(zoneId, kind) {
+      for (const seg of Object.values(this.segments)) {
+        if (seg.zoneId !== zoneId || seg.type === "boss") continue;
+        this._applyZoneMutation(seg, kind);
+      }
+    }
+
+    _applyZoneMutation(seg, kind) {
+      const z = { id: seg.zoneId };
+      if (kind === "scorched") {
+        for (const d of seg.decos.slice()) {
+          if (d.type === "tree" || d.type === "cactus" || d.type === "iceTree") {
+            if (seg.rng() < 0.6) d.type = "burntTree";
+            else seg.decos.splice(seg.decos.indexOf(d), 1);
+          }
+        }
+        for (const h of seg.hazards.slice()) {
+          if (h.water) seg.hazards.splice(seg.hazards.indexOf(h), 1);
+        }
+        if (seg.rng() < 0.5) {
+          this._haz(seg, z, "lava", seg.x0 + 100 + seg.rng() * (SEG_LEN - 200), { w: 60 + seg.rng() * 40 });
+        }
+      } else if (kind === "ravaged") {
+        if (seg.rng() < 0.7) this._barrel(seg, seg.x0 + 100 + seg.rng() * (SEG_LEN - 200));
+        if (seg.rng() < 0.5) {
+          this._breakable(seg, z, seg.x0 + 120 + seg.rng() * (SEG_LEN - 240), "crate",
+            { drop: { coins: 2, gems: 0, xp: 1 } });
+        }
+      } else if (kind === "thawed") {
+        for (const d of seg.decos) if (d.type === "iceTree") d.type = "tree";
+        for (const h of seg.hazards.slice()) {
+          if (h.type === "icecrystal") seg.hazards.splice(seg.hazards.indexOf(h), 1);
+        }
+        if (seg.rng() < 0.6) {
+          this._haz(seg, z, "water", seg.x0 + 120 + seg.rng() * (SEG_LEN - 240));
+        }
+      } else if (kind === "erupted") {
+        if (seg.rng() < 0.6) {
+          this._haz(seg, z, "lava", seg.x0 + 140 + seg.rng() * (SEG_LEN - 280), { w: 80 + seg.rng() * 60 });
+        }
+        seg.feature = seg.feature || { type: "rockfall", x: seg.x0, w: SEG_LEN, interval: 3, spots: [seg.x0 + SEG_LEN / 2] };
+      } else if (kind === "glassed") {
+        for (const d of seg.decos) if (d.type === "cactus") d.type = "glassTree";
+        if (seg.rng() < 0.4) {
+          this._haz(seg, z, "spikewall", seg.x0 + 150 + seg.rng() * (SEG_LEN - 300));
+        }
+      } else if (kind === "shattered") {
+        for (const d of seg.decos) if (d.type === "pillar") d.broken = true;
+        seg.feature = seg.feature || { type: "rockfall", x: seg.x0, w: SEG_LEN, interval: 2.4, spots: [seg.x0 + 200, seg.x0 + SEG_LEN - 200] };
+      }
     }
 
     /* ---------- room type selection with anti-repetition ---------- */

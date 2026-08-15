@@ -719,6 +719,7 @@
       if (!def) return;
       const worldIdx = Math.floor(zoneIdx / SL.Levels.ZONES.length);
       this.boss = new SL.Bosses.Boss(this, def, worldIdx);
+      this.boss.zoneIdx = zoneIdx;
       if (this.run.bossHpMul) this.boss.maxHp = Math.round(this.boss.maxHp * this.run.bossHpMul);
       this.boss.hp = this.boss.maxHp;
       SL.Audio.play("bossWarn");
@@ -1070,15 +1071,27 @@
     }
 
     _enemyPool(zoneId) {
-      switch (zoneId) {
-        case "forest": return ["grunt", "grunt", "archer", "shield"];
-        case "village": return ["grunt", "assassin", "mage", "shield", "grunt"];
-        case "desert": return ["grunt", "archer", "assassin", "tank", "archer"];
-        case "frozen": return ["grunt", "mage", "tank", "grunt", "archer"];
-        case "volcano": return ["grunt", "archer", "mage", "tank", "assassin"];
-        case "castle": return ["assassin", "mage", "tank", "shield", "assassin"];
-        default: return ["grunt"];
-      }
+      const base = {
+        forest: ["grunt", "grunt", "archer", "shield"],
+        village: ["grunt", "assassin", "mage", "shield", "grunt"],
+        desert: ["grunt", "archer", "assassin", "tank", "archer"],
+        frozen: ["grunt", "mage", "tank", "grunt", "archer"],
+        volcano: ["grunt", "archer", "mage", "tank", "assassin"],
+        castle: ["assassin", "mage", "tank", "shield", "assassin"],
+      }[zoneId] || ["grunt"];
+      const zoneIdx = Math.floor(this.distance / SL.Levels.ZONE_LENGTH);
+      const kind = this.worldGen.mutatedZones[zoneIdx];
+      if (!kind) return base;
+      // boss-killed regions field tougher, elemental enemies
+      const pools = {
+        scorched: ["grunt", "mage", "tank", "grunt", "archer"],
+        ravaged: ["assassin", "mage", "tank", "shield", "assassin"],
+        glassed: ["grunt", "archer", "assassin", "tank", "archer"],
+        thawed: ["grunt", "mage", "tank", "grunt", "archer"],
+        erupted: ["grunt", "archer", "mage", "tank", "assassin"],
+        shattered: ["assassin", "mage", "tank", "shield", "assassin"],
+      };
+      return pools[kind] || base;
     }
 
     spawnEnemy(type, x, elite) {
@@ -1152,8 +1165,11 @@
     _applyOnHitEffects(target, dmg) {
       const r = this.run;
       const out = {};
+      // embers linger in scorched regions — fire builds burn hotter there
+      const zoneIdx = Math.floor(this.distance / SL.Levels.ZONE_LENGTH);
+      const scorched = this.worldGen.mutatedZones[zoneIdx] === "scorched";
       if (r.burn) {
-        out.burn = { dps: dmg * 0.1 * r.burnLevel, dur: 2.5 };
+        out.burn = { dps: dmg * 0.1 * r.burnLevel * (scorched ? 2 : 1), dur: 2.5 };
       }
       if (r.poison) {
         out.poison = { dps: dmg * 0.06 * r.poisonLevel, dur: 3 };
@@ -1391,6 +1407,28 @@
       for (let i = 0; i < 6; i++) this.spawnPickup("gem", b.x + (Math.random() - 0.5) * 80, b.y - 40 - Math.random() * 60);
       for (let i = 0; i < 12; i++) this.spawnPickup("coin", b.x + (Math.random() - 0.5) * 120, b.y - 40 - Math.random() * 60);
       for (let i = 0; i < 8; i++) this.spawnPickup("xp", b.x + (Math.random() - 0.5) * 100, b.y - 40 - Math.random() * 60);
+      // the boss's death permanently changes its region
+      if (b.zoneIdx !== undefined) this._mutateZone(b.zoneIdx);
+    }
+
+    _mutateZone(zoneIdx) {
+      const zone = SL.Levels.ZONES[zoneIdx % SL.Levels.ZONES.length];
+      const kinds = {
+        forest: "scorched", village: "ravaged", desert: "glassed",
+        frozen: "thawed", volcano: "erupted", castle: "shattered",
+      };
+      const kind = kinds[zone.id];
+      if (!kind || this.worldGen.mutatedZones[zoneIdx]) return;
+      this.worldGen.markZone(zoneIdx, kind);
+      this.worldGen.applyMutationToGenerated(zone.id, kind);
+      const names = {
+        scorched: "Scorched", ravaged: "Ravaged", glassed: "Glassed",
+        thawed: "Thawed", erupted: "Erupted", shattered: "Shattered",
+      };
+      this.banner(zone.name + " — " + names[kind] + "!", "boss");
+      this.toast("The " + names[kind].toLowerCase() + " now claims this region.", "zone");
+      SL.Audio.play("bossWarn");
+      this.screenShake(8, 0.4);
     }
 
     onPlayerDeath() {
@@ -1632,6 +1670,31 @@
             ctx.fillRect(d.x + d.w * 0.42, gy - d.h * 0.72, d.w * 0.16, d.h * 0.72);
             ctx.beginPath();
             ctx.arc(d.x + d.w / 2, gy - d.h * 0.78, d.w * 0.5, 0, U.TAU);
+            ctx.fill();
+            break;
+          }
+          case "burntTree": {
+            ctx.fillStyle = "#1c1c1c";
+            ctx.fillRect(d.x + d.w * 0.42, gy - d.h * 0.72, d.w * 0.16, d.h * 0.72);
+            ctx.beginPath();
+            ctx.arc(d.x + d.w / 2, gy - d.h * 0.78, d.w * 0.5, 0, U.TAU);
+            ctx.fill();
+            const ember = 0.4 + Math.sin(time * 5 + d.x) * 0.2;
+            ctx.fillStyle = U.rgba(255, 120, 40, ember);
+            ctx.beginPath();
+            ctx.arc(d.x + d.w / 2, gy - d.h * 0.78, d.w * 0.28, 0, U.TAU);
+            ctx.fill();
+            break;
+          }
+          case "glassTree": {
+            ctx.fillStyle = "#bfe9f5";
+            ctx.fillRect(d.x + d.w * 0.45, gy - d.h * 0.8, d.w * 0.1, d.h * 0.8);
+            ctx.fillStyle = "rgba(200,235,255,0.85)";
+            ctx.beginPath();
+            ctx.moveTo(d.x + d.w * 0.5, gy - d.h);
+            ctx.lineTo(d.x + d.w * 0.75, gy - d.h * 0.55);
+            ctx.lineTo(d.x + d.w * 0.5, gy - d.h * 0.5);
+            ctx.closePath();
             ctx.fill();
             break;
           }
